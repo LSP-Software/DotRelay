@@ -36,6 +36,7 @@ import { createEnvironment, resolveEnvironmentReference } from "./admin";
 import type { ParsedArguments } from "./args";
 import { createSessionStore } from "./auth";
 import { note } from "./components";
+import { createProgress } from "./progress";
 import { describeCliClient } from "./device-describe";
 import { deviceMetadataPath, readDeviceId } from "./device-storage";
 import { CliError, CliInvocationError, sanitizeCliLine } from "./errors";
@@ -90,9 +91,9 @@ import {
 // pull can never share keys with this User: an owner or admin has to choose
 // to share them, in the web app or with dotrelay team share-keys.
 const SHARE_PROJECT_KEYS_HOW =
-  'in the DotRelay web app they open Members and choose "Share project keys" for you, or they run dotrelay team share-keys <your-github-login>.';
+  'in the DotRelay web app, they open Members and choose "Share project keys" for you. Or they run dotrelay team share-keys <your-github-login>.';
 
-export const SHARE_PROJECT_KEYS_STEP = `A Team owner or admin has to share the Project keys with you: ${SHARE_PROJECT_KEYS_HOW}`;
+export const SHARE_PROJECT_KEYS_STEP = `A team owner or admin has to share the project keys with you. To do that, ${SHARE_PROJECT_KEYS_HOW}`;
 
 // Names who can fix a missing Project key: another of this User's own
 // Devices when one holds the key, otherwise an owner or admin.
@@ -106,11 +107,11 @@ export const missingProjectKeyNotice = (
   // so unlocking comes before any share from them.
   if (!input.accountKeyUnlocked)
     return input.ownDeviceHoldsKey
-      ? `This Device is missing the Project epoch grant and is locked. Unlock it with dotrelay device recover, then run dotrelay pull again: it reads the Project key from your account, or another of your Devices shares it after a dotrelay pull there. Otherwise a Team owner or admin can share the Project keys with you: ${SHARE_PROJECT_KEYS_HOW}`
-      : `This Device is missing the Project epoch grant. ${SHARE_PROJECT_KEYS_STEP} Then run dotrelay pull again.`;
+      ? `This device doesn't have the project key yet, and it's locked. Unlock it with dotrelay device recover, then run dotrelay pull again. It then reads the project key from your account, or gets it from another of your devices after you run dotrelay pull there. Otherwise a team owner or admin can share the project keys with you. To do that, ${SHARE_PROJECT_KEYS_HOW}`
+      : `This device doesn't have the project key yet. ${SHARE_PROJECT_KEYS_STEP} Then run dotrelay pull again.`;
   return input.ownDeviceHoldsKey
-    ? `This Device is missing the Project epoch grant. Another of your Devices can read this Project: run dotrelay pull on that Device, then run dotrelay pull here again. Otherwise a Team owner or admin can share the Project keys with you: ${SHARE_PROJECT_KEYS_HOW}`
-    : `This Device is missing the Project epoch grant. ${SHARE_PROJECT_KEYS_STEP} Then run dotrelay pull again.`;
+    ? `This device doesn't have the project key yet, but another of your devices can read this project. Run dotrelay pull on that device, then run dotrelay pull here again. Otherwise a team owner or admin can share the project keys with you. To do that, ${SHARE_PROJECT_KEYS_HOW}`
+    : `This device doesn't have the project key yet. ${SHARE_PROJECT_KEYS_STEP} Then run dotrelay pull again.`;
 };
 
 // id instead of creating another Environment to publish into. Each CLI process
@@ -150,12 +151,12 @@ export const loadWorkflowSession = async (
       if (!token)
         throw new CliError(
           "authentication",
-          "login is required for this Server Profile",
+          "you're not signed in to this server. Run dotrelay login.",
           {},
           "authentication_required",
         );
       throw new CliInvocationError(
-        "the Environment reference could not be resolved to a stable id; run dotrelay project link to record the Project",
+        "this worktree isn't linked to a project, so the environment can't be looked up. Run dotrelay project link.",
       );
     }
     requestedEnvironment = (
@@ -202,7 +203,7 @@ export const loadWorkflowSession = async (
   if (!boundary.session.active || !boundary.session.userId)
     throw new CliError(
       "authentication",
-      "login is required for this Server Profile",
+      "you're not signed in to this server. Run dotrelay login.",
       {},
       "authentication_required",
     );
@@ -210,20 +211,20 @@ export const loadWorkflowSession = async (
     throw knownDeviceId
       ? new CliError(
           "authentication",
-          "the local Device is not active on this Server Profile; run dotrelay device enroll or dotrelay device recover",
+          "this device isn't active on this server. Run dotrelay device enroll or dotrelay device recover.",
           {},
           "device_not_active",
         )
       : new CliError(
           "authentication",
-          "no Device is enrolled for this Server Profile; run dotrelay login or dotrelay device enroll",
+          "this machine isn't set up as a device on this server yet. Run dotrelay login or dotrelay device enroll.",
           {},
           "device_bundle_missing",
         );
   if (!knownDeviceId)
     throw new CliError(
       "authentication",
-      "no Device is enrolled for this Server Profile; run dotrelay login or dotrelay device enroll",
+      "this machine isn't set up as a device on this server yet. Run dotrelay login or dotrelay device enroll.",
       {},
       "device_bundle_missing",
     );
@@ -237,26 +238,26 @@ export const loadWorkflowSession = async (
     options,
     boundary,
     deviceId,
-    "the local Device is not active on this Server Profile; run dotrelay device enroll or dotrelay device recover",
+    "this device isn't active on this server. Run dotrelay device enroll or dotrelay device recover.",
   );
   if (!boundary.cryptoAvailable)
     throw new CliError(
       "crypto",
-      "the closed v3 cryptographic suite is unavailable",
+      "the server doesn't support the encryption this version of DotRelay uses",
       {},
       "crypto_provider_unavailable",
     );
   if (!boundary.epochCurrent)
     throw new CliError(
       "conflict",
-      "the Project epoch is stale",
+      "the project's keys were rotated since this device last synced",
       {},
       "stale_epoch",
     );
   if (boundary.rotationRequired)
     throw new CliError(
       "conflict",
-      "required key rotation must complete before publishing",
+      "this project's keys have to be rotated first. A team owner or admin needs to run dotrelay project rotate.",
       {},
       "rotation_required",
     );
@@ -267,7 +268,7 @@ export const loadWorkflowSession = async (
   )
     throw new CliError(
       "conflict",
-      "the selected Environment has no active Project context",
+      "the server didn't say which project this environment belongs to",
       {},
       "environment_context_missing",
     );
@@ -276,7 +277,9 @@ export const loadWorkflowSession = async (
   let createdEnvironmentId: string | undefined;
   if (!selectedEnvironment) {
     if (parsed.command !== "init")
-      throw new CliInvocationError("an Environment must be selected");
+      throw new CliInvocationError(
+        "no environment is selected. Pass --environment <environment-id-or-label>.",
+      );
     const earlier = createdEnvironmentByInvocation.get(options);
     if (earlier !== undefined) {
       // A previous phase of this invocation already created the Environment.
@@ -296,7 +299,7 @@ export const loadWorkflowSession = async (
   if (!token)
     throw new CliError(
       "authentication",
-      "login is required for this Server Profile",
+      "you're not signed in to this server. Run dotrelay login.",
       {},
       "authentication_required",
     );
@@ -340,7 +343,7 @@ export const loadWorkflowSession = async (
   )
     throw new CliError(
       "conflict",
-      "the selected Environment has no active Project context",
+      "the server didn't say which project this environment belongs to",
       {},
       "environment_context_missing",
     );
@@ -398,7 +401,7 @@ export const loadWorkflowSession = async (
     let envelope: ReturnType<typeof parseAccountKeyEnvelope> | null = null;
     try {
       envelope = parseAccountKeyEnvelope(
-        fromBase64(boundary.accountKeyEnvelope, "Account key envelope"),
+        fromBase64(boundary.accountKeyEnvelope, "account key envelope"),
       );
     } catch {
       envelope = null;
@@ -459,7 +462,7 @@ export const loadWorkflowSession = async (
     if (userId === undefined)
       throw new CliError(
         "transient",
-        "the Server Profile returned no User identity",
+        "the server didn't say who you're signed in as. Run dotrelay login.",
         {},
         "session_invalid",
       );
@@ -500,7 +503,7 @@ export const loadWorkflowSession = async (
       if (error instanceof CliError && error.code === "state_conflict")
         throw new CliError(
           "conflict",
-          "this project epoch already has an account key envelope; refresh and open the existing key instead of creating another",
+          "another device already saved a key for this project epoch to your account. Run the command again to use that key.",
           {},
           "account_key_envelope_conflict",
         );
@@ -508,7 +511,7 @@ export const loadWorkflowSession = async (
     }
   } else if (epochKey === undefined && boundary.epochGrant) {
     epochKey = await openProjectEpochGrant(
-      fromBase64(boundary.epochGrant, "Project epoch grant"),
+      fromBase64(boundary.epochGrant, "project epoch grant"),
       keys.encryptionPrivateKey,
       projectGrantVerification(
         boundary,
@@ -696,7 +699,7 @@ export const loadWorkflowSession = async (
         boundary.verifiedSigners?.account ?? [],
       );
       return openOwnedUserValueKey(
-        fromBase64(object, "User value key envelope"),
+        fromBase64(object, "Only me value key envelope"),
         unlockedKey,
         extras.length === 0
           ? verification
@@ -900,7 +903,7 @@ const projectEpochKeyRing = async (input: {
   const links: Uint8Array[] = [];
   for (const link of input.boundary.epochKeyLinks) {
     try {
-      links.push(fromBase64(link, "Project epoch key link"));
+      links.push(fromBase64(link, "project epoch key link"));
     } catch {
       // A malformed entry claims no epoch.
     }
@@ -1007,7 +1010,7 @@ const pastProjectEpochKeys = async (input: {
       continue;
     try {
       const envelope = parseAccountKeyEnvelope(
-        fromBase64(entry.object, "Account key envelope"),
+        fromBase64(entry.object, "account key envelope"),
       );
       const epoch = envelope.projectEpoch;
       if (
@@ -1060,13 +1063,13 @@ const projectEpochTrustFailure = (error: unknown): CliError => {
   return error.code === "epoch-rollback"
     ? new CliError(
         "crypto",
-        "the Server Profile reports an older Project epoch than this installation already verified. Do not publish from this Device until you have checked the Server Profile",
+        "the server says this project is on an older key epoch than this machine already verified, so the epoch went backwards. Don't push from this device, and don't trust this server until you've checked it.",
         {},
         "project_epoch_rollback",
       )
     : new CliError(
         "crypto",
-        "the Server Profile delivered a Project key that differs from the one this installation already verified for that epoch. Do not trust this Server Profile until you have checked it",
+        "the server sent a project key that differs from the one this machine already verified for that epoch. Don't trust this server until you've checked it.",
         {},
         "project_key_mismatch",
       );
@@ -1091,6 +1094,21 @@ export const syncWorkflow = async (
   const trustedRevisionId = environmentId;
   const trustedRevisionHash = zeros(48);
   let synced: Awaited<ReturnType<typeof workflow.session.syncAndDecode>>;
+  // Fetching and verifying the history is the slow part of pull, push and
+  // diff, so it gets a spinner on a terminal. Nothing else writes to the
+  // terminal while it runs.
+  const output = options.terminal?.output ?? process.stderr;
+  const showsProgress =
+    !parsed.json &&
+    !options.noInput &&
+    ["pull", "push", "init", "diff"].includes(parsed.command);
+  const progress = createProgress({
+    output,
+    live: (output as { isTTY?: boolean }).isTTY === true,
+    quiet: !showsProgress,
+    transient: parsed.command === "diff",
+  });
+  progress.start("Fetching and verifying the environment's history");
   try {
     synced = await workflow.session.syncAndDecode({
       environmentId,
@@ -1102,6 +1120,7 @@ export const syncWorkflow = async (
       },
     });
   } catch (error) {
+    progress.fail("Couldn't fetch the environment's history");
     if (!(error instanceof UnreadableLaneError)) throw error;
     // A legacy (format 1) lane binds no Environment, so it is applied only
     // from this account or a teammate whose identity was confirmed here
@@ -1109,7 +1128,7 @@ export const syncWorkflow = async (
     if (error.reason === "unconfirmed-legacy-author")
       throw new CliError(
         "crypto",
-        `a Value in this Environment was last published in the legacy lane format by a teammate this installation has not confirmed${error.authorUserId ? ` (${sanitizeCliLine(error.authorUserId)})` : ""}. Compare their fingerprint with dotrelay team members --fingerprints and confirm it with dotrelay team trust <user-id>, or ask a teammate to publish the Value again`,
+        `a value in this environment was last published in an older format by a teammate you haven't confirmed on this machine${error.authorUserId ? ` (${sanitizeCliLine(error.authorUserId)})` : ""}. Compare their fingerprint (dotrelay team members --fingerprints), then confirm it with dotrelay team trust <user-id>. Or ask them to publish the value again.`,
         {},
         "unconfirmed_legacy_lane",
       );
@@ -1118,10 +1137,16 @@ export const syncWorkflow = async (
     // untouched and names the grant that must be repaired.
     const detail =
       error.laneKind === "USER_DEFINED_VALUE"
-        ? "the Environment's User-defined Values cannot be decrypted with this Device's key grant; run dotrelay device enroll or dotrelay device recover, then re-publish the affected Values"
-        : `the Environment's Manifest cannot be decrypted with this Device's Project key grant.\n${SHARE_PROJECT_KEYS_STEP}\nThen run dotrelay pull again.`;
+        ? "this device can't decrypt the environment's Only me values. Nothing was written. Run dotrelay device enroll or dotrelay device recover, then push the affected values again."
+        : `this device can't decrypt the environment with the project key it has. Nothing was written.\n${SHARE_PROJECT_KEYS_STEP}\nThen run dotrelay pull again.`;
     throw new CliError("incomplete-export", detail, {}, "unreadable_manifest");
   }
+  const count = synced.variables.filter(
+    (variable) => !variable.tombstone,
+  ).length;
+  progress.done(
+    `Verified the history and decrypted ${count} ${count === 1 ? "value" : "values"} on this device`,
+  );
   const page = synced.page;
   const localHead = await readTrustedHead(
     statePath(options.stateDirectory, environmentId),
@@ -1139,7 +1164,7 @@ export const syncWorkflow = async (
     if (!localHeadVerified && !verifiedEmptyHead)
       throw new CliError(
         "crypto",
-        "the local trusted head does not match verified Environment history",
+        "the last revision this machine verified isn't in the environment's history anymore. Don't trust this server until you've checked it.",
         {},
         "trusted_head_conflict",
       );
@@ -1147,7 +1172,7 @@ export const syncWorkflow = async (
   if (page.projectEpoch !== BigInt(safeProjectEpoch(page.projectEpoch)))
     throw new CliError(
       "transient",
-      "the server returned an invalid Project epoch",
+      "the server returned an invalid project epoch",
       {},
       "response_invalid",
     );
@@ -1170,7 +1195,7 @@ export const syncWorkflow = async (
   if (page.projectEpoch > sessionEpoch)
     throw new CliError(
       "conflict",
-      "the Project epoch changed while this command ran; run it again",
+      "the project's keys were rotated while this command ran. Run it again.",
       {},
       "stale_epoch",
     );

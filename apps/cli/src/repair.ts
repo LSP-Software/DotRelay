@@ -87,7 +87,7 @@ export const resetTrustedEnvironmentHistory = async (
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
     throw new CliError(
       "local-io",
-      "could not read the local state directory",
+      "Couldn't read the DotRelay state directory. Check that you own it and can read it.",
       {},
       "trusted_head_read_failed",
     );
@@ -145,11 +145,11 @@ export const reselectWorktreeNavigation = async (
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT")
       throw new CliInvocationError(
-        "no worktree context is recorded; run dotrelay context",
+        "This worktree has no saved context yet. Run dotrelay context.",
       );
     throw new CliError(
       "local-io",
-      "could not read worktree context",
+      "Couldn't read this worktree's saved context. Check that you can read the file.",
       {},
       "context_read_failed",
     );
@@ -165,11 +165,11 @@ export const reselectWorktreeNavigation = async (
   const projectCleared = invalid || context?.projectId !== undefined;
   const environmentCleared = invalid || context?.environmentId !== undefined;
   const statement = invalid
-    ? "The stored worktree context is invalid. Reselect will back it up and remove it. Device keys and trusted Revision history are kept."
-    : "Reselect the Project and Environment recorded for this worktree. Device keys and trusted Revision history are kept. The current worktree context is backed up first.";
+    ? "This worktree's saved context is damaged. Reselecting backs it up, then removes it. Device keys and trusted revision history stay as they are."
+    : "Pick the project and environment for this worktree again. The current context is backed up first. Device keys and trusted revision history stay as they are.";
   if (!(await input.approve(statement)))
     throw new CliInvocationError(
-      "context reselect was declined; nothing was changed",
+      "You declined the reselect. Nothing was changed.",
     );
   const backupPath = await backupMetadataContents(
     input.stateDirectory,

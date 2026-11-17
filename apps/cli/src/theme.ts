@@ -11,24 +11,27 @@ export type Tone =
 
 type Level = "off" | "256" | "truecolor";
 
+// The web app's palette: primary green oklch(0.82 0.17 150), amber for
+// "needs attention", and red, oklch(0.7 0.18 28), only for destructive or
+// failed steps.
 const TRUECOLOR: Record<Tone, string> = {
-  brand: "105 225 136",
-  info: "54 165 215",
-  warn: "224 159 69",
-  danger: "251 103 92",
-  accent: "169 121 193",
-  fg: "231 237 233",
-  muted: "148 158 152",
-  faint: "108 116 111",
-  ghost: "73 79 75",
+  brand: "101;226;135",
+  info: "120;180;230",
+  warn: "250;187;65",
+  danger: "250;105;92",
+  accent: "120;180;230",
+  fg: "231;237;233",
+  muted: "148;158;152",
+  faint: "110;118;113",
+  ghost: "62;69;65",
 };
 
 const INDEXED: Record<Tone, string> = {
   brand: "38;5;82",
-  info: "38;5;38",
+  info: "38;5;110",
   warn: "38;5;214",
   danger: "38;5;203",
-  accent: "38;5;141",
+  accent: "38;5;110",
   fg: "38;5;252",
   muted: "38;5;250",
   faint: "38;5;244",

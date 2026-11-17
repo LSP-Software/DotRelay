@@ -39,7 +39,7 @@ const withoutRevokedDevice = (admin: StrictJsonClient): StrictJsonClient => {
     if (error instanceof CliError && error.code === "device_proof_required")
       throw new CliError(
         "authentication",
-        "this machine's Device is no longer active and your account still has an active Device; run the command on that Device, or run dotrelay device enroll to authorize this machine again",
+        "This machine's device isn't active anymore, but your account still has an active device. Run the command on that device, or run dotrelay device enroll to enroll this machine again.",
         {},
         "device_not_active",
       );
@@ -116,7 +116,7 @@ export const leaveTeam = async (
   const reference = parsed.positionals[0];
   if (!reference)
     throw new CliInvocationError(
-      "team leave needs a Team id or name; usage: dotrelay team leave <team-id-or-name>",
+      "Say which team to leave. Run dotrelay team leave <team-id-or-name>.",
     );
   const { admin } = await accountClient(options);
   const wanted = reference.trim().toLowerCase();
@@ -126,7 +126,7 @@ export const leaveTeam = async (
   );
   if (matches.length > 1)
     throw new CliInvocationError(
-      `several Teams are named ${sanitizeCliLine(reference)}; pass one of these Team ids: ${matches.map((team) => team.id).join(", ")}`,
+      `More than one team is named ${sanitizeCliLine(reference)}. Pass one of these team ids instead: ${matches.map((team) => team.id).join(", ")}.`,
     );
   const [team] = matches;
   // A Membership still waiting for keys is not in the Team list; its id is
@@ -134,7 +134,7 @@ export const leaveTeam = async (
   if (!team && !uuidPattern.test(wanted))
     throw new CliError(
       "invocation",
-      `no Team matches ${sanitizeCliLine(reference)}; run dotrelay team list to see your Teams`,
+      `No team matches ${sanitizeCliLine(reference)}. Run dotrelay team list to see your teams.`,
       {},
       "resource_not_found",
     );
@@ -142,12 +142,14 @@ export const leaveTeam = async (
   const label = team ? sanitizeCliLine(team.name) : teamId;
   if (options.noInput && !options.force)
     throw new CliInvocationError(
-      "--no-input requires --force to confirm leaving the Team",
+      "With --no-input, add --force to confirm leaving the team.",
     );
   if (!(options.noInput && options.force)) {
-    const question = `Leave ${label}? You lose access to its Projects at once and need a new invitation to come back.`;
+    const question = `Leave ${label}? You lose access to its projects right away, and you'll need a new invitation to come back.`;
     if (!(await confirmSilent(options, question)))
-      throw new CliInvocationError("leaving the Team was cancelled");
+      throw new CliInvocationError(
+        "Cancelled. You're still a member of the team.",
+      );
   }
   await admin.post(
     `/api/v1/teams/${encodeURIComponent(teamId)}/leave`,
@@ -159,7 +161,7 @@ export const leaveTeam = async (
     teamId,
     ...(team ? { team: team.name } : {}),
     lifecycle: "REMOVED",
-    message: `Left ${label}. Its owners should rotate each Project key (dotrelay project rotate), since this Device keeps what it already downloaded.`,
+    message: `Left ${label}. This device keeps whatever it already pulled, so the team's owners should rotate each project key with dotrelay project rotate.`,
   };
 };
 
@@ -196,7 +198,7 @@ export const exportAccount = async (
   );
   return {
     output: path,
-    message: `Wrote your account data to ${sanitizeCliLine(path)}. It holds no Values or keys; run dotrelay pull or dotrelay export for those.`,
+    message: `Wrote your account data to ${sanitizeCliLine(path)}. It doesn't include values or keys. Use dotrelay pull or dotrelay export for those.`,
   };
 };
 
@@ -225,7 +227,7 @@ export const deleteAccount = async (
   if (!userId)
     throw new CliError(
       "transient",
-      "the server returned an invalid account deletion plan",
+      "The server sent an account deletion plan this CLI can't read. Nothing was deleted.",
       {},
       "response_invalid",
     );
@@ -233,7 +235,7 @@ export const deleteAccount = async (
   if (blocking.length > 0)
     throw new CliError(
       "conflict",
-      `you are the last active owner of ${blocking.join(", ")}; make another active Member an owner, or delete the Team, before deleting your account`,
+      `You're the last active owner of ${blocking.join(", ")}. Make another active member an owner, or delete the team, before you delete your account.`,
       {},
       "owner_transfer_required",
     );
@@ -241,20 +243,22 @@ export const deleteAccount = async (
   const left = teamNames(plan.teamsLeft);
   if (options.noInput && !options.force)
     throw new CliInvocationError(
-      "--no-input requires --force to confirm deleting the account",
+      "With --no-input, add --force to confirm deleting your account.",
     );
   if (!(options.noInput && options.force)) {
     const consequences = [
-      "Deleting your account cannot be undone. Every session ends, every Device stops working, and your Recovery Code, password and passkeys unlock nothing.",
+      "Deleting your account can't be undone. Every session ends, every device stops working, and your recovery code, encryption password and passkeys won't unlock anything.",
       ...(deleted.length > 0
-        ? [`Deleted with it (you are the only Member): ${deleted.join(", ")}.`]
+        ? [
+            `Deleted with it, because you're the only member: ${deleted.join(", ")}.`,
+          ]
         : []),
-      ...(left.length > 0 ? [`You leave: ${left.join(", ")}.`] : []),
+      ...(left.length > 0 ? [`You'll leave: ${left.join(", ")}.`] : []),
       `Type "${ACCOUNT_DELETION_PHRASE}" to confirm:`,
     ].join("\n");
     const answer = await ask(options, consequences);
     if (answer.trim() !== ACCOUNT_DELETION_PHRASE)
-      throw new CliInvocationError("deleting the account was cancelled");
+      throw new CliInvocationError("Cancelled. Your account wasn't deleted.");
   }
   const operationId = crypto.randomUUID();
   const signature = provingDeviceId
@@ -297,7 +301,7 @@ export const deleteAccount = async (
     localDataRemoved: removed,
     message: [
       `Deleted your account on ${sanitizeCliLine(options.profile.name)} and removed this machine's ${removed.join(" and ")} for it.`,
-      `Still on this machine: the ${sanitizeCliLine(options.profile.name)} Server Profile entry, trusted-head and teammate pins, and worktree contexts under ${sanitizeCliLine(options.stateDirectory)}, plus any .env files you pulled. Signing in again creates a new, empty account.`,
+      `Still on this machine under ${sanitizeCliLine(options.stateDirectory)}: the ${sanitizeCliLine(options.profile.name)} server profile, trusted-head and member pins, and worktree contexts. Any .env files you pulled are still there too. Signing in again creates a new, empty account.`,
     ].join("\n"),
   };
 };

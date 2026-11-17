@@ -166,7 +166,12 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const requireOpaqueId = (value: unknown, label: string): string => {
   if (typeof value !== "string" || !opaqueId.test(value))
-    throw new CliError("invocation", `${label} is invalid`, {}, "invalid_id");
+    throw new CliError(
+      "invocation",
+      `the ${label} isn't valid`,
+      {},
+      "invalid_id",
+    );
   return value;
 };
 
@@ -178,7 +183,7 @@ const requireGitHubRepositoryId = (value: unknown): string => {
   )
     throw new CliError(
       "transient",
-      "the server returned an invalid GitHub Repository id",
+      "the server returned an invalid GitHub repository id",
       {},
       "response_invalid",
     );
@@ -203,7 +208,7 @@ const requireEnvironmentHeadHash = (value: unknown): string => {
   if (typeof value !== "string" || value.length < 2)
     throw new CliError(
       "transient",
-      "the server returned an invalid Environment head hash",
+      "the server returned an invalid environment head hash",
       {},
       "response_invalid",
     );
@@ -214,22 +219,22 @@ const parseEnvironment = (value: unknown): EnvironmentSummary => {
   if (!isRecord(value))
     throw new CliError(
       "transient",
-      "the server returned an invalid Environment",
+      "the server returned an invalid environment",
       {},
       "response_invalid",
     );
   return Object.freeze({
-    id: requireOpaqueId(value.id, "Environment id"),
-    projectId: requireOpaqueId(value.projectId, "Project id"),
+    id: requireOpaqueId(value.id, "environment id"),
+    projectId: requireOpaqueId(value.projectId, "project id"),
     label:
       typeof value.label === "string" && value.label.trim().length > 0
         ? value.label.trim()
         : "default",
-    lifecycle: requireLifecycle(value.lifecycle, "Environment lifecycle"),
+    lifecycle: requireLifecycle(value.lifecycle, "environment lifecycle"),
     currentHeadId:
       value.currentHeadId === null
         ? null
-        : requireOpaqueId(value.currentHeadId, "Environment head id"),
+        : requireOpaqueId(value.currentHeadId, "environment head id"),
     currentHeadHash:
       value.currentHeadHash == null
         ? null
@@ -248,7 +253,7 @@ const requireAuthoredAtMs = (value: unknown): number => {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
     throw new CliError(
       "transient",
-      "the server returned an invalid Environment head time",
+      "the server returned an invalid environment head time",
       {},
       "response_invalid",
     );
@@ -262,7 +267,7 @@ export const linkProject = async (
   const response = await client.post(
     "/api/v1/projects",
     {
-      teamId: requireOpaqueId(input.teamId, "Team id"),
+      teamId: requireOpaqueId(input.teamId, "team id"),
       repositoryHost: input.repository.host,
       repositoryOwner: input.repository.owner,
       repositoryName: input.repository.name,
@@ -275,10 +280,10 @@ export const linkProject = async (
     { idempotencyKey: crypto.randomUUID() },
   );
   return Object.freeze({
-    id: requireOpaqueId(response.id, "Project id"),
-    teamId: requireOpaqueId(response.teamId, "Team id"),
+    id: requireOpaqueId(response.id, "project id"),
+    teamId: requireOpaqueId(response.teamId, "team id"),
     githubRepositoryId: requireGitHubRepositoryId(response.githubRepositoryId),
-    lifecycle: requireLifecycle(response.lifecycle, "Project lifecycle"),
+    lifecycle: requireLifecycle(response.lifecycle, "project lifecycle"),
     ...(response.environment !== undefined
       ? { environment: parseEnvironment(response.environment) }
       : {}),
@@ -296,15 +301,15 @@ const parseProjectSummary = (value: unknown): ProjectSummary => {
   if (!isRecord(value))
     throw new CliError(
       "transient",
-      "the server returned an invalid Project",
+      "the server returned an invalid project",
       {},
       "response_invalid",
     );
   return Object.freeze({
-    id: requireOpaqueId(value.id, "Project id"),
-    teamId: requireOpaqueId(value.teamId, "Team id"),
+    id: requireOpaqueId(value.id, "project id"),
+    teamId: requireOpaqueId(value.teamId, "team id"),
     githubRepositoryId: requireGitHubRepositoryId(value.githubRepositoryId),
-    lifecycle: requireLifecycle(value.lifecycle, "Project lifecycle"),
+    lifecycle: requireLifecycle(value.lifecycle, "project lifecycle"),
   });
 };
 
@@ -322,7 +327,7 @@ export const findProjectByRepository = async (
     githubRepositoryId: requireGitHubRepositoryId(githubRepositoryId),
   });
   if (options.teamId !== undefined)
-    query.set("teamId", requireOpaqueId(options.teamId, "Team id"));
+    query.set("teamId", requireOpaqueId(options.teamId, "team id"));
   const response = await client.get(`/api/v1/projects?${query}`, [
     "project",
     "projects",
@@ -347,7 +352,7 @@ const parseCandidateList = (value: unknown): ProjectSummary[] => {
   if (!Array.isArray(value))
     throw new CliError(
       "transient",
-      "the server returned an invalid Project list",
+      "the server returned an invalid project list",
       {},
       "response_invalid",
     );
@@ -361,7 +366,7 @@ export const listTeams = async (
   if (!Array.isArray(response.teams))
     throw new CliError(
       "transient",
-      "the server returned an invalid Team list",
+      "the server returned an invalid team list",
       {},
       "response_invalid",
     );
@@ -370,19 +375,19 @@ export const listTeams = async (
       if (!isRecord(entry))
         throw new CliError(
           "transient",
-          "the server returned an invalid Team list",
+          "the server returned an invalid team list",
           {},
           "response_invalid",
         );
       if (typeof entry.name !== "string" || entry.name.trim().length === 0)
         throw new CliError(
           "transient",
-          "the server returned an invalid Team name",
+          "the server returned an invalid team name",
           {},
           "response_invalid",
         );
       return Object.freeze({
-        id: requireOpaqueId(entry.id, "Team id"),
+        id: requireOpaqueId(entry.id, "team id"),
         name: entry.name.trim(),
       });
     }),
@@ -395,7 +400,7 @@ export const createTeam = async (
 ): Promise<TeamSummary> => {
   const trimmed = name.trim();
   if (trimmed.length === 0 || trimmed.length > 255)
-    throw new CliInvocationError("Team name must be 1 to 255 characters");
+    throw new CliInvocationError("team names must be 1 to 255 characters long");
   const response = await client.post(
     "/api/v1/teams",
     { name: trimmed },
@@ -405,12 +410,12 @@ export const createTeam = async (
   if (typeof response.name !== "string" || response.name.trim().length === 0)
     throw new CliError(
       "transient",
-      "the server returned an invalid Team",
+      "the server returned an invalid team",
       {},
       "response_invalid",
     );
   return Object.freeze({
-    id: requireOpaqueId(response.id, "Team id"),
+    id: requireOpaqueId(response.id, "team id"),
     name: response.name.trim(),
   });
 };
@@ -421,7 +426,7 @@ export const findDefaultTeam = async (
   const teams = await listTeams(client);
   const [first] = teams;
   if (first === undefined)
-    throw new CliInvocationError("no Team is available for this Project");
+    throw new CliInvocationError("you aren't in any team yet");
   return first;
 };
 
@@ -436,7 +441,7 @@ export type ResolveTeamOptions = Readonly<{
 
 const askForTeamName = async (options: ResolveTeamOptions): Promise<string> => {
   const write = options.write ?? (() => undefined);
-  write("No Team yet. Create one to continue.\n");
+  write("You don't have a team yet. Name one to continue.\n");
   const answer = (
     await options.prompt(`Team name [${options.suggestedName}]`)
   ).trim();
@@ -453,27 +458,29 @@ export const resolveTeamForProject = async (
     const teamId = options.teamId.toLowerCase();
     const selected = teams.find((team) => team.id === teamId);
     if (!selected)
-      throw new CliInvocationError("the specified Team is not available");
+      throw new CliInvocationError(
+        `team ${options.teamId} isn't one of your teams`,
+      );
     return selected;
   }
   if (first === undefined) {
     if (options.noInput)
       throw new CliInvocationError(
-        "no Team is available; run init interactively or pass --team",
+        "you don't have a team yet. Run this command without --no-input to create one, or pass --team <team-id>.",
       );
     return createTeam(client, await askForTeamName(options));
   }
   if (teams.length === 1) return first;
   if (options.noInput)
     throw new CliInvocationError(
-      "multiple Teams are available; pass --team <team-id>",
+      "you're in more than one team. Pass --team <team-id> to pick one.",
     );
   const write = options.write ?? (() => undefined);
   const selectedId = await selectOption(
     "Team",
     [
       ...teams.map((team) => ({ id: team.id, label: team.name })),
-      { id: "create", label: "Create a new Team" },
+      { id: "create", label: "Create a new team" },
     ],
     {
       prompt: options.prompt,
@@ -483,10 +490,10 @@ export const resolveTeamForProject = async (
   );
   if (selectedId !== "create") {
     const selected = teams.find((team) => team.id === selectedId);
-    if (!selected) throw new CliInvocationError("choose a Team from the list");
+    if (!selected) throw new CliInvocationError("pick one of the listed teams");
     return selected;
   }
-  write("Create a Team to continue.\n");
+  write("Name your new team.\n");
   const name = (
     await options.prompt(`Team name [${options.suggestedName}]`)
   ).trim();
@@ -498,13 +505,13 @@ export const listEnvironments = async (
   projectId: string,
 ): Promise<readonly EnvironmentSummary[]> => {
   const response = await client.get(
-    `/api/v1/projects/${encodeURIComponent(requireOpaqueId(projectId, "Project id"))}/environments`,
+    `/api/v1/projects/${encodeURIComponent(requireOpaqueId(projectId, "project id"))}/environments`,
     ["environments"],
   );
   if (!Array.isArray(response.environments))
     throw new CliError(
       "transient",
-      "the server returned an invalid Environment list",
+      "the server returned an invalid environment list",
       {},
       "response_invalid",
     );
@@ -519,7 +526,7 @@ export const requireEnvironmentLabel = (label: string): string => {
   const trimmed = label.trim();
   if (!ENVIRONMENT_LABEL.test(trimmed))
     throw new CliInvocationError(
-      "an Environment label starts with a letter and has up to 63 letters, digits, dots, dashes, or underscores",
+      "environment labels start with a letter and have up to 63 letters, digits, dots, dashes or underscores",
     );
   return trimmed;
 };
@@ -534,16 +541,23 @@ export const environmentNotFound = (
     (candidate) => candidate.lifecycle === "active",
   );
   const labels = [...new Set(active.map((candidate) => candidate.label))];
-  const available =
-    labels.length === 0
-      ? "this Project has no active Environment yet"
-      : `available: ${labels.join(", ")}`;
+  const name = JSON.stringify(reference.slice(0, 64));
   const suggestion = ENVIRONMENT_LABEL.test(reference)
     ? `dotrelay env create ${reference}`
     : "dotrelay env create <label>";
+  const lines =
+    labels.length === 0
+      ? [
+          `this project has no environment called ${name}, and no active environments yet.`,
+          `Create it with ${suggestion} (team owners and admins only).`,
+        ]
+      : [
+          `this project has no environment called ${name}. Active ones: ${labels.join(", ")}.`,
+          `Use one of those, or create it with ${suggestion} (team owners and admins only).`,
+        ];
   return new CliError(
     "invocation",
-    `no Environment is labelled ${JSON.stringify(reference.slice(0, 64))} in this Project (${available}).\nPick one of those, or create it with ${suggestion} (Team owners and admins).\nRun dotrelay env list to see every Environment.`,
+    [...lines, "Run dotrelay env list to see every environment."].join("\n"),
     {},
     "environment_not_found",
   );
@@ -578,7 +592,7 @@ export const resolveEnvironmentReference = async (
     if (!selected)
       throw new CliError(
         "transient",
-        "the server returned an invalid Environment list",
+        "the server returned an invalid environment list",
         {},
         "response_invalid",
       );
@@ -587,10 +601,10 @@ export const resolveEnvironmentReference = async (
   if (options.noInput)
     throw new CliError(
       "invocation",
-      `the Environment reference matches multiple Environments; pass --environment <environment-id> with one of:\n${matches
+      `more than one environment has that label. Pass --environment <environment-id> with one of:\n${matches
         .map(
           (candidate, index) =>
-            `${index + 1}. ${candidate.label} (${candidate.lifecycle}) — ${candidate.id}`,
+            `${index + 1}. ${candidate.label} (${candidate.lifecycle}, ${candidate.id})`,
         )
         .join("\n")}`,
       {},
@@ -600,7 +614,7 @@ export const resolveEnvironmentReference = async (
     "Environment",
     matches.map((candidate) => ({
       id: candidate.id,
-      label: `${candidate.label} — ${candidate.id}`,
+      label: `${candidate.label} (${candidate.id})`,
     })),
     {
       ...(options.terminal ? { terminal: options.terminal } : {}),
@@ -612,7 +626,7 @@ export const resolveEnvironmentReference = async (
   );
   const selected = matches.find((candidate) => candidate.id === selectedId);
   if (!selected)
-    throw new CliInvocationError("choose an Environment from the list");
+    throw new CliInvocationError("pick one of the listed environments");
   return selected;
 };
 
@@ -622,7 +636,7 @@ export const createEnvironment = async (
   label = "default",
 ): Promise<EnvironmentSummary> => {
   const response = await client.post(
-    `/api/v1/projects/${encodeURIComponent(requireOpaqueId(projectId, "Project id"))}/environments`,
+    `/api/v1/projects/${encodeURIComponent(requireOpaqueId(projectId, "project id"))}/environments`,
     { label: requireEnvironmentLabel(label) },
     [
       "id",
@@ -643,7 +657,7 @@ export const archiveEnvironment = async (
 ): Promise<EnvironmentSummary> =>
   parseEnvironment(
     await client.post(
-      `/api/v1/environments/${encodeURIComponent(requireOpaqueId(environmentId, "Environment id"))}/lifecycle`,
+      `/api/v1/environments/${encodeURIComponent(requireOpaqueId(environmentId, "environment id"))}/lifecycle`,
       { action: "archive" },
       [
         "id",
@@ -770,7 +784,7 @@ export const resolveEnvironmentForProject = async (
     if (!soleEligible)
       throw new CliError(
         "transient",
-        "the server returned an invalid Environment list",
+        "the server returned an invalid environment list",
         {},
         "response_invalid",
       );
@@ -779,7 +793,7 @@ export const resolveEnvironmentForProject = async (
   if (eligible.length > 1) {
     if (options.noInput)
       throw new CliInvocationError(
-        "multiple Environments are available; pass --environment <environment-id-or-label>",
+        "this project has more than one environment. Pass --environment <environment-id-or-label> to pick one.",
       );
     const selectedId = await selectOption(
       "Environment",
@@ -799,13 +813,13 @@ export const resolveEnvironmentForProject = async (
       (environment) => environment.id === selectedId,
     );
     if (!selected)
-      throw new CliInvocationError("choose an Environment from the list");
+      throw new CliInvocationError("pick one of the listed environments");
     return selected;
   }
   if (options.command === "init" || options.command === "push")
     return createEnvironment(client, projectId);
   throw new CliInvocationError(
-    "no active Environment is available for this Project; pass --environment <environment-id-or-label>",
+    "this project has no active environment. Pass --environment <environment-id-or-label> to use an archived one.",
   );
 };
 
@@ -830,7 +844,7 @@ const readResponse = async (response: Response): Promise<unknown> => {
         await reader.cancel();
         throw new CliError(
           "transient",
-          "the server response was too large",
+          "the server's response was too large",
           {},
           "response_too_large",
         );
@@ -890,7 +904,7 @@ export const createStrictJsonClient = (
     if (!token)
       throw new CliError(
         "authentication",
-        "login is required for this Server Profile",
+        "you're not signed in to this server. Run dotrelay login.",
         {},
         "authentication_required",
       );
@@ -931,7 +945,7 @@ export const createStrictJsonClient = (
         if (!(error instanceof NetworkAttemptError)) throw error;
         throw networkFailureCliError(
           error,
-          "the Server Profile",
+          `the server at ${profile.origin}`,
           "service_unavailable",
         );
       }
@@ -976,7 +990,7 @@ export const createStrictJsonClient = (
         if (error instanceof CliError) throw error;
         throw new CliError(
           "transient",
-          "the Server Profile rejected the request",
+          "the server refused the request without saying why. Try again later.",
           {},
           "request_failed",
         );
@@ -987,7 +1001,7 @@ export const createStrictJsonClient = (
     } catch {
       throw new CliError(
         "transient",
-        "the server returned an invalid administration response",
+        "the server sent a response DotRelay didn't expect",
         {},
         "response_invalid",
       );
@@ -1032,7 +1046,7 @@ export const createStrictJsonClient = (
           )
             throw new CliError(
               "crypto",
-              "the saved Device bundle does not match the keys registered on this Server Profile; run dotrelay device recover",
+              "this device's saved keys don't match the ones the server has for it. Run dotrelay device recover.",
               {},
               "device_bundle_invalid",
             );

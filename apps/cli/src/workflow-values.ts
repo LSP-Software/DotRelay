@@ -30,7 +30,7 @@ const completeEntries = (
     const names = pullVariableNames(groups.unreadable);
     throw new CliError(
       "incomplete-export",
-      `${names} cannot be decrypted on this Device, so nothing was ${action}. Run dotrelay device recover if this Device is locked; otherwise the Value belongs to another Member, who must set it in their own dotenv file.`,
+      `${names} can't be decrypted on this device, so nothing was ${action}. If the value belongs to another member, they need to set it in their own dotenv file. If this device is locked, run dotrelay device recover.`,
       {
         missingCount: groups.unreadable.length,
         variableNames: names.slice(0, 512),
@@ -42,7 +42,7 @@ const completeEntries = (
     const names = pullVariableNames(groups.requiredMissing);
     throw new CliError(
       "incomplete-export",
-      `${names} are required and have no value, so nothing was ${action}. Add your values for them to a dotenv file and run dotrelay push.`,
+      `${names} are required but have no value, so nothing was ${action}. Add your values for them to a dotenv file, then run dotrelay push.`,
       {
         missingCount: groups.requiredMissing.length,
         variableNames: names.slice(0, 512),
@@ -120,7 +120,7 @@ const valueState = (
 const stateLabel = {
   set: "value set",
   missing: "required, no value",
-  unreadable: "cannot be decrypted here",
+  unreadable: "can't be decrypted here",
   optional: "optional, no value",
 } as const;
 
@@ -136,12 +136,12 @@ export const renderVariableList = (
   variables: readonly ListedVariable[],
 ): string => {
   if (variables.length === 0)
-    return "This Environment has no Variables yet. Publish some with dotrelay push.\n";
+    return "This environment has no variables yet. Add some with dotrelay push.\n";
   const names = variables.map((variable) => sanitizeCliLine(variable.name));
   const width = Math.max(4, ...names.map((name) => name.length));
   const lines = variables.map(
     (variable, index) =>
-      `  ${(names[index] ?? "").padEnd(width)}  ${variable.ownership.padEnd(12)}  ${stateLabel[variable.state]}`,
+      `  ${(names[index] ?? "").padEnd(width)}  ${(variable.ownership === "shared" ? "Team" : "Only me").padEnd(7)}  ${stateLabel[variable.state]}`,
   );
   return `${lines.join("\n")}\n`;
 };
@@ -200,7 +200,7 @@ export const spawnChildProcess: ChildProcessRunner = async (
   } catch {
     throw new CliError(
       "local-io",
-      `could not start ${JSON.stringify((argv[0] ?? "").slice(0, 128))}; check that the command exists and is executable`,
+      `couldn't start ${JSON.stringify((argv[0] ?? "").slice(0, 128))}. Check that the command exists and is executable.`,
       {},
       "command_start_failed",
     );

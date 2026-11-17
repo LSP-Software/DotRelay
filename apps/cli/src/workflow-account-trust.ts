@@ -48,7 +48,7 @@ export const loadAccountTrustPins = async (
   } catch {
     throw new CliError(
       "crypto",
-      `the account trust pins at ${accountTrustPinsPath(options)} are unreadable. Restore the file, or remove it and compare every teammate's fingerprint again`,
+      `Can't read the saved account fingerprints at ${accountTrustPinsPath(options)}. Restore the file, or remove it and compare every member's fingerprint again.`,
       {},
       "account_trust_pins_invalid",
     );
@@ -69,7 +69,7 @@ const rosterBytes = (boundary: Boundary): Map<string, Uint8Array | null> =>
     [...boundary.accountRosters].map(([userId, roster]) => {
       if (roster === null) return [userId, null];
       try {
-        return [userId, fromBase64(roster, "Account Device roster")];
+        return [userId, fromBase64(roster, "account device roster")];
       } catch {
         return [userId, new Uint8Array()];
       }
@@ -263,8 +263,8 @@ export const establishAccountTrust = async (
     throw new CliError(
       "crypto",
       own.status === "rollback"
-        ? "the Server Profile returned an older Device roster for this account than this installation already verified, or none at all. Do not trust this Server Profile until you have checked it"
-        : "the Server Profile returned a Device roster for this account that the account key did not sign. Do not trust this Server Profile until you have checked it",
+        ? "The server sent an older device roster for your account than this device already verified, or none at all. Don't trust this server until you've checked it."
+        : "The server sent a device roster for your account that your account key didn't sign. Don't trust this server until you've checked it.",
       { status: own.status },
       "account_roster_untrusted",
     );
@@ -319,14 +319,14 @@ export const establishAccountTrust = async (
   );
   if (blocked.length > 0)
     notices.push(
-      `${blocked.length} teammate account key${blocked.length === 1 ? "" : "s"} changed or rolled back; their Devices are not trusted. Run dotrelay team members --fingerprints, compare out of band, then dotrelay team trust <user-id>`,
+      `${blocked.length} member account key${blocked.length === 1 ? "" : "s"} changed or rolled back, so this device doesn't trust ${blocked.length === 1 ? "that member's" : "those members'"} devices. Run dotrelay team members --fingerprints and compare over another channel. Then run dotrelay team trust <user-id>.`,
     );
   const firstSight = [...resolution.users.values()].filter(
     (user) => user.newlyPinned,
   );
   if (firstSight.length > 0)
     notices.push(
-      `Pinned ${firstSight.length} teammate account key${firstSight.length === 1 ? "" : "s"} seen for the first time on this installation. Their Revisions verify, but no Project key is taken from them until you compare fingerprints (dotrelay team members --fingerprints) and run dotrelay team trust <user-id>`,
+      `Pinned ${firstSight.length} member account key${firstSight.length === 1 ? "" : "s"} this device hadn't seen before. Their revisions verify, but this device won't take a project key from them until you compare fingerprints. Run dotrelay team members --fingerprints, then dotrelay team trust <user-id>.`,
     );
   return Object.freeze({
     boundary: applyAccountTrust(boundary, resolution, userId, {

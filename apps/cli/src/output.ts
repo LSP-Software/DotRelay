@@ -23,7 +23,7 @@ export const assertSafeStdout = (
   if (options.terminal && options.reveal !== true)
     throw new CliError(
       "invocation",
-      "refusing to write Values to terminal stdout; add --reveal explicitly",
+      "--stdout would print the values in your terminal. Add --reveal to allow that.",
       {},
       "unsafe_stdout",
     );
@@ -84,7 +84,7 @@ const writeProtected = async (
     if (temporary) await unlink(temporary).catch(() => undefined);
     throw new CliError(
       "local-io",
-      "could not atomically write the requested output",
+      "couldn't write the output file",
       {},
       "output_write_failed",
     );
@@ -136,7 +136,7 @@ const retainPreviousFile = async (
   } catch {
     throw new CliError(
       "local-io",
-      "could not read the prior file for the recoverable copy",
+      "couldn't read the existing file to keep a copy of it, so the new one wasn't written",
       {},
       "output_write_failed",
     );
@@ -165,7 +165,7 @@ const retainPreviousFile = async (
     await unlink(temporary).catch(() => undefined);
     throw new CliError(
       "local-io",
-      "could not retain a recoverable copy of the prior file",
+      "couldn't keep a copy of the existing file, so the new one wasn't written",
       {},
       "output_write_failed",
     );

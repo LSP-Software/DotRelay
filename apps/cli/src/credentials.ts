@@ -40,7 +40,7 @@ const asBufferSource = (input: Uint8Array): ArrayBuffer => {
 const storeUnavailable = (): CliError =>
   new CliError(
     "local-io",
-    "the local credential store is unavailable",
+    "Couldn't read the credential store on this device. Check that you own the DotRelay state directory and can read it.",
     {},
     "credential_store_unavailable",
   );
@@ -48,7 +48,7 @@ const storeUnavailable = (): CliError =>
 const storeInvalid = (): CliError =>
   new CliError(
     "local-io",
-    "the local credential store returned an invalid credential",
+    "A saved credential on this device is damaged or was sealed with a different key, so DotRelay can't use it.",
     {},
     "credential_store_invalid",
   );
@@ -56,7 +56,7 @@ const storeInvalid = (): CliError =>
 const storeWriteFailed = (): CliError =>
   new CliError(
     "local-io",
-    "could not save a credential in the local credential store",
+    "Couldn't save a credential on this device. Check that you own the DotRelay state directory and can write to it.",
     {},
     "credential_store_write_failed",
   );
@@ -64,7 +64,7 @@ const storeWriteFailed = (): CliError =>
 const storeDeleteFailed = (): CliError =>
   new CliError(
     "local-io",
-    "could not remove a credential from the local credential store",
+    "Couldn't remove a saved credential from this device. Check that you own the DotRelay state directory and can write to it.",
     {},
     "credential_store_delete_failed",
   );

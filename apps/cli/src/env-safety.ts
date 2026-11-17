@@ -214,7 +214,7 @@ export const refuseProcessControlNames = (
     .join(" ");
   throw new CliError(
     "invocation",
-    `${listed} would control how the command or its shell starts, and any Member of the Team can set ${refused.length === 1 ? "it" : "them"}, so nothing was ${action}. Check who set ${refused.length === 1 ? "this Variable" : "these Variables"} with dotrelay history; if you trust the ${refused.length === 1 ? "Value" : "Values"}, re-run with ${flags}.`,
+    `${listed} would control how the command or its shell starts, and any member of the team can set ${refused.length === 1 ? "it" : "them"}, so nothing was ${action}. Check who set ${refused.length === 1 ? "this variable" : "these variables"} with dotrelay history. If you trust the ${refused.length === 1 ? "value" : "values"}, run the command again with ${flags}.`,
     { variableNames: listed.slice(0, 512) },
     "process_control_variable",
   );
@@ -229,5 +229,5 @@ export const processControlPullWarning = (
   const flagged = names.filter(isProcessControlName);
   if (flagged.length === 0) return null;
   const listed = flagged.map(sanitizeCliLine).join(", ");
-  return `${listed} ${flagged.length === 1 ? "controls" : "control"} how programs or shells start, not just your application. Any Member of the Team can set ${flagged.length === 1 ? "it" : "them"}; check dotrelay history before loading this file into a shell or process manager.`;
+  return `${listed} ${flagged.length === 1 ? "controls" : "control"} how programs or shells start, not just your app. Any member of the team can set ${flagged.length === 1 ? "it" : "them"}. Check dotrelay history before you load this file into a shell or process manager.`;
 };

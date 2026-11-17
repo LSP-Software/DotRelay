@@ -101,7 +101,7 @@ example over SSH); in both cases the same URL, code, and expiry are shown so the
 URL manually. When the browser launcher is unavailable, fails to start, or exits nonzero, the CLI
 shows that manual path instead of aborting and keeps polling for the authorization to complete.
 If the server admits only listed GitHub accounts (the private alpha) and the browser is signed in
-with one that isn't listed, login and setup stop with a "Private alpha" error (exit 6,
+with one that isn't listed, login and setup stop with a "Not on the alpha list yet" error (exit 6,
 `alpha_admission_required`). Against the hosted origin it says to email support@dotrelay.dev;
 against any other server, to ask its operator. A command run with an older session that is no
 longer admitted gets the same error. `dotrelay logout`, then `dotrelay login`, switches accounts.
@@ -218,7 +218,7 @@ to override those defaults. If the Environment already has a genesis Revision, `
 `push` instead of failing.
 
 New Variables must be classified as shared or user-defined. Interactive `init` shows a board of
-every Variable name (never Values) and lets you toggle Team vs Only you before continuing. `push`
+every Variable name (never Values) and lets you toggle Team vs Only me before continuing. `push`
 shows that board only for names that are not already in the Environment; existing Variables keep
 their ownership. JSON and `--classify` still use `shared` and `user-defined`. `--classify NAME=shared`
 or `--classify NAME=user-defined` skips the board when every new Variable is covered, and is required
@@ -478,6 +478,37 @@ never rewrites or removes earlier history: it appends a new signed Rollback Revi
 the selected lanes, preserving all other current Values. The final review is masked and
 names that append-only consequence; `--reveal` shows the unified Value diff in it instead.
 
+## Guided runs
+
+Each human run draws along a rail down the left edge: `┌` opens the command, `◇` marks a
+finished step with its time, `▲` needs attention, `■` failed, `◆` is waiting on you, and `└`
+closes with the result or the next command. Text wraps on the rail at the terminal width;
+URLs and commands that cannot wrap stay whole. `NO_COLOR` turns colour off and keeps the layout.
+
+When a command stops on something the user can fix from this terminal, an interactive run says
+what is wrong in one line, offers the fix, runs it on the same rail, and carries on with the
+original command:
+
+| Stopped on                                        | Offer                                    | Then          |
+| ------------------------------------------------- | ---------------------------------------- | ------------- |
+| no Server Profile (`profile_not_selected`)        | choose a server, then `setup`            | carries on    |
+| signed out (`authentication_required`)            | `login`                                  | carries on    |
+| no Device enrolled (`device_bundle_missing`)      | `login`                                  | carries on    |
+| no account key on this Device                     | `device recover`                         | carries on    |
+| a dropped connection or a server error            | try the same command again               | carries on    |
+| `pull`, `diff` or `run` in an unlinked Repository | `init`, which shows its own review first | init's result |
+
+Each offer is made at most once per run. Declining ends the run with the next command and the
+same exit code as before. Nothing destructive and nothing that sends Values happens without its
+own review and confirmation; the offer only starts the command that would ask. Fixes that need
+someone else (a revoked Device, Project keys a teammate has not shared yet) are explained, not
+offered.
+
+A run is guided only when stdin, stdout and stderr are all terminals, `CI` is not set, and
+neither `--json` nor `--no-input` is passed. Every other run never prompts: it prints the same
+headline, keeps the precise detail with its flags and file names, and ends with the exact next
+command, with the same exit codes.
+
 ## Output and automation
 
 Every command validates its complete argument contract before authentication or writes: unexpected
@@ -490,8 +521,13 @@ conflicts with both `--output <file>` and `--json` because Values never appear i
 mutation and writes no output file.
 
 Protected Values are never included in status, ordinary progress, JSON responses, or diagnostics.
-Human stderr is the next action. `--json` diagnostics contain category, code, sanitized detail,
-exit code, and non-secret counts only. `--debug` replaces opaque unexpected-error detail with the
+Human stderr ends with the next action: `└  next  dotrelay login`. `--json` diagnostics contain
+category, code, sanitized detail, exit code, non-secret counts, and, when there is one, `next`:
+the exact command that moves things forward (`"next":"dotrelay login"`). Under `--no-input`,
+`next` is a command that needs no prompt, such as
+`dotrelay device recover --recovery-code-file <path>`. A machine with no Server Profile reports
+`profile_not_selected` and a worktree whose Repository is linked to no Project the user can
+access reports `project_not_linked`; both keep exit code 2. `--debug` replaces opaque unexpected-error detail with the
 sanitized operational message. When the Server Profile rate-limits a request (`rate_limited`), the
 CLI retries within its budget and then names the wait the service asked for, such as `wait 2
 minutes and retry`; `--json` diagnostics carry it as `retryAfterSeconds`. A Team that has reached
@@ -516,9 +552,9 @@ previously authenticated, enrolled persistent Device with explicit profile conte
 Portable plaintext or environment-variable credential bundles and auto-approved ephemeral Devices
 are not supported.
 
-`status` prints a short card: Server Profile, Origin, Session, Device, and, inside a linked
-worktree, the Repository, Project, and Environment, ending with a state line or the next command
-to run. When the selected Project owes a key rotation, the card adds the same advice line that
+`status` prints a short card: the server, the GitHub session, this Device, and, inside a linked
+worktree, the Project and Environment, with the Repository and Environment in its header. It
+ends with `All set` or the next command to run. When the selected Project owes a key rotation, the card adds the same advice line that
 protected commands print. In a worktree this machine has not linked yet, it suggests `dotrelay pull` (when a
 teammate already published the Repository) or `dotrelay init`. Without a Server Profile it names
 `dotrelay setup https://api.dotrelay.dev`, the hosted service; a self-hosted installation uses its

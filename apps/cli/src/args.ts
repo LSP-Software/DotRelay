@@ -1,4 +1,5 @@
 import { CliInvocationError } from "./errors";
+import { HOSTED_ORIGIN } from "./hosted-origin";
 
 export { CliInvocationError } from "./errors";
 
@@ -144,9 +145,13 @@ export const rejectForbiddenFlags = (args: readonly string[]): void => {
       ? token.slice(0, token.indexOf("="))
       : token;
     if (forbiddenFlags.has(flag))
-      throw new CliInvocationError(`${flag} is not supported`);
+      throw new CliInvocationError(`DotRelay doesn't accept ${flag}.`);
   }
 };
+
+// A message, then the command's usage on its own line when there is one.
+const withUsage = (message: string, usage: string | undefined): string =>
+  usage ? `${message}\nUsage: ${usage}` : message;
 
 const assignValue = (parsed: MutableArguments, flag: string, value: string) => {
   if (flag === "--profile") parsed.profile = value;
@@ -168,15 +173,14 @@ const assignValue = (parsed: MutableArguments, flag: string, value: string) => {
     const name = separator < 1 ? "" : value.slice(0, separator);
     const classification = separator < 1 ? "" : value.slice(separator + 1);
     const usage = usageFor(parsed.command, parsed.subcommand);
-    const usageSuffix = usage ? `; usage: ${usage}` : "";
+    const invalid = withUsage(
+      "--classify takes NAME=shared or NAME=user-defined.",
+      usage,
+    );
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
-      throw new CliInvocationError(
-        `--classify requires NAME=shared or NAME=user-defined${usageSuffix}`,
-      );
+      throw new CliInvocationError(invalid);
     if (classification !== "shared" && classification !== "user-defined")
-      throw new CliInvocationError(
-        `--classify requires NAME=shared or NAME=user-defined${usageSuffix}`,
-      );
+      throw new CliInvocationError(invalid);
     parsed.classifications[name] = classification;
   } else if (flag === "--variable") {
     // The reference may be the operator-visible Variable name or the stable
@@ -187,7 +191,10 @@ const assignValue = (parsed: MutableArguments, flag: string, value: string) => {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) {
       const usage = usageFor(parsed.command, parsed.subcommand);
       throw new CliInvocationError(
-        `--allow-env requires a Variable name${usage ? `; usage: ${usage}` : ""}`,
+        withUsage(
+          "--allow-env takes a variable name, such as --allow-env NODE_OPTIONS.",
+          usage,
+        ),
       );
     }
     parsed.allowedEnvironmentNames.push(value);
@@ -197,7 +204,10 @@ const assignValue = (parsed: MutableArguments, flag: string, value: string) => {
     if (!/^[0-9a-f]{40}$/.test(fingerprint)) {
       const usage = usageFor(parsed.command, parsed.subcommand);
       throw new CliInvocationError(
-        `--fingerprint requires the 40 hex digits of an account fingerprint${usage ? `; usage: ${usage}` : ""}`,
+        withUsage(
+          "--fingerprint takes the 40 hex digits of an account fingerprint.",
+          usage,
+        ),
       );
     }
     parsed.fingerprint = fingerprint;
@@ -500,27 +510,45 @@ const flagPresent = (parsed: MutableArguments, key: FlagKey): boolean => {
   return Boolean(parsed[key]);
 };
 
-const describeCount = (count: number): string =>
-  count === 0 ? "zero" : count === 1 ? "one" : String(count);
+// What a command's arguments are, in words, for "dotrelay x needs ...".
+const ARGUMENT_NOUNS: Readonly<Record<string, string>> = {
+  setup: "the server's address",
+  "profile add": "a profile name and the server's address",
+  "profile rebind": "a profile name and the server's address",
+  "profile use": "a profile name",
+  "team trust": "the member's user id",
+  "team share-keys": "the member's GitHub login or user id",
+  "team decline": "the invitation id or the team",
+  "team leave": "the team's id or name",
+  "env use": "an environment id or label",
+  "env create": "a label for the new environment",
+  rollback: "the revision to roll back to",
+};
 
-const describePositionals = (expected: number | readonly number[]): string => {
-  if (Array.isArray(expected)) {
-    const words = expected.map(describeCount);
-    if (words.length === 2)
-      return `${words[0]} or ${words[1]} positional arguments`;
-    const head = words.slice(0, -1).join(", ");
-    return `${head}, or ${words[words.length - 1]} positional arguments`;
-  }
-  return expected === 0
-    ? "no positional arguments"
-    : expected === 1
-      ? "exactly one positional argument"
-      : `${expected} positional arguments`;
+// The sentence for the wrong number of arguments: what is missing, or
+// which arguments it doesn't take.
+const describeArgumentMismatch = (
+  label: string,
+  expected: number | readonly number[],
+  received: readonly string[],
+): string => {
+  const counts = Array.isArray(expected) ? expected : [expected];
+  const most = Math.max(...counts);
+  if (received.length < Math.min(...counts))
+    return `dotrelay ${label} needs ${ARGUMENT_NOUNS[label] ?? "an argument"}.`;
+  const extra = received.slice(most);
+  const noun = extra.length === 1 ? "argument" : "arguments";
+  return most === 0
+    ? `dotrelay ${label} doesn't take the ${noun} ${extra.join(" ")}.`
+    : `dotrelay ${label} doesn't take the extra ${noun} ${extra.join(" ")}.`;
 };
 
 const validateCommand = (parsed: MutableArguments) => {
   const command = parsed.command;
-  if (!command) throw new CliInvocationError("a command is required");
+  if (!command)
+    throw new CliInvocationError(
+      "Name a command to run. Run dotrelay help to see them.",
+    );
   const label = `${command}${parsed.subcommand ? ` ${parsed.subcommand}` : ""}`;
   const usage = usageForLabel(label);
   const allowed = SUBCOMMANDS[command];
@@ -530,15 +558,21 @@ const validateCommand = (parsed: MutableArguments) => {
   // a usage line for a command that does not exist.
   if (allowed && !subcommandOptional && !parsed.subcommand)
     throw new CliInvocationError(
-      `the ${command} command needs a subcommand: ${allowed.join(", ")}; usage: dotrelay ${command} <subcommand>`,
+      withUsage(
+        `dotrelay ${command} needs a subcommand: ${allowed.join(", ")}.`,
+        `dotrelay ${command} <subcommand>`,
+      ),
     );
   if (allowed && parsed.subcommand && !allowed.includes(parsed.subcommand))
     throw new CliInvocationError(
-      `unknown ${command} subcommand: ${parsed.subcommand}; choose one of: ${allowed.join(", ")}; usage: dotrelay ${command} <subcommand>`,
+      withUsage(
+        `dotrelay ${command} has no ${parsed.subcommand} subcommand. Choose one of: ${allowed.join(", ")}.`,
+        `dotrelay ${command} <subcommand>`,
+      ),
     );
   if (!allowed && parsed.subcommand)
     throw new CliInvocationError(
-      `the ${command} command does not accept a subcommand; usage: ${usage}`,
+      withUsage(`dotrelay ${command} doesn't take a subcommand.`, usage),
     );
   if (
     command === "env" &&
@@ -547,7 +581,10 @@ const validateCommand = (parsed: MutableArguments) => {
     parsed.positionals.length > 0
   )
     throw new CliInvocationError(
-      `the env use command accepts an Environment id or label either as an argument or with --environment, not both; usage: ${usage}`,
+      withUsage(
+        "Give the environment either as an argument or with --environment, not both.",
+        usage,
+      ),
     );
   if (
     command === "init" &&
@@ -555,18 +592,24 @@ const validateCommand = (parsed: MutableArguments) => {
     parsed.positionals.length === 1
   )
     throw new CliInvocationError(
-      `the init command accepts an Environment id or label either as an argument or with --environment, not both; usage: ${usage}`,
+      withUsage(
+        "Give the environment either as an argument or with --environment, not both.",
+        usage,
+      ),
     );
   const allowedFlags = FLAG_PERMISSIONS[label] ?? [];
   for (const key of FLAG_KEYS) {
     if (!flagPresent(parsed, key)) continue;
     if (key === "name")
       throw new CliInvocationError(
-        `--name is not a supported option; usage: ${usage}`,
+        withUsage("DotRelay has no --name option.", usage),
       );
     if (!allowedFlags.includes(key))
       throw new CliInvocationError(
-        `${FLAG_TOKENS[key]} is not supported by ${label}; usage: ${usage}`,
+        withUsage(
+          `${FLAG_TOKENS[key]} doesn't work with dotrelay ${label}.`,
+          usage,
+        ),
       );
   }
   if (
@@ -574,29 +617,38 @@ const validateCommand = (parsed: MutableArguments) => {
     !EXPORT_FORMATS.includes(parsed.format as ExportFormat)
   )
     throw new CliInvocationError(
-      `--format must be one of: ${EXPORT_FORMATS.join(", ")}; usage: ${usage}`,
+      withUsage(
+        `--format must be ${EXPORT_FORMATS.slice(0, -1).join(", ")} or ${EXPORT_FORMATS[EXPORT_FORMATS.length - 1]}.`,
+        usage,
+      ),
     );
   if (parsed.limit !== undefined) {
     const limit = Number(parsed.limit);
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 256)
       throw new CliInvocationError(
-        `--limit must be an integer from 1 to 256; usage: ${usage}`,
+        withUsage("--limit must be a whole number from 1 to 256.", usage),
       );
     parsed.limit = limit;
   }
   if (command === "pull") {
     if (parsed.stdout && parsed.output)
       throw new CliInvocationError(
-        `pull --stdout and --output are mutually exclusive; use either \`dotrelay pull --stdout\` or \`dotrelay pull --output <file>\`; usage: ${usage}`,
+        withUsage(
+          "Use --stdout to print the values or --output <file> to write them to a file, not both.",
+          usage,
+        ),
       );
     if (parsed.stdout && parsed.json)
       throw new CliInvocationError(
-        `pull --stdout and --json are mutually exclusive because Values never appear in JSON output; use \`dotrelay pull --output <file> --json\` instead; usage: ${usage}`,
+        withUsage(
+          "--stdout doesn't work with --json, because values never appear in JSON output. To write a file and get JSON, use dotrelay pull --output <file> --json.",
+          usage,
+        ),
       );
   }
   if (command === "project" && parsed.subcommand === "link" && !parsed.team)
     throw new CliInvocationError(
-      `the project link command requires --team <team-id>; usage: ${usage}`,
+      withUsage("dotrelay project link needs --team <team-id>.", usage),
     );
   const positionalCounts: Partial<
     Record<CommandName, number | readonly number[]>
@@ -654,16 +706,24 @@ const validateCommand = (parsed: MutableArguments) => {
         parsed.environment === undefined &&
         allowedFlags.includes("environment");
       const correction = suggestEnvironment
-        ? `; use --environment ${parsed.positionals[0]} instead`
-        : "";
+        ? ` To choose an environment, use --environment ${parsed.positionals[0]}.`
+        : label === "setup" && parsed.positionals.length === 0
+          ? ` Use ${HOSTED_ORIGIN}, or your own server's address if you self-host.`
+          : "";
       throw new CliInvocationError(
-        `the ${label} command takes ${describePositionals(expected)} but received ${parsed.positionals.length}${correction}; usage: ${usage}`,
+        withUsage(
+          `${describeArgumentMismatch(label, expected, parsed.positionals)}${correction}`,
+          usage,
+        ),
       );
     }
   }
   if (command === "run" && parsed.positionals.length === 0)
     throw new CliInvocationError(
-      `the run command needs the command to start after --; usage: ${usage}`,
+      withUsage(
+        "Put the command to start after --, such as dotrelay run -- npm start.",
+        usage,
+      ),
     );
   if (
     command === "device" &&
@@ -671,14 +731,20 @@ const validateCommand = (parsed: MutableArguments) => {
     !parsed.from
   )
     throw new CliInvocationError(
-      `the device ${parsed.subcommand} command requires --from <file>; usage: ${usage}`,
+      withUsage(
+        `dotrelay device ${parsed.subcommand} needs --from <file>.`,
+        usage,
+      ),
     );
   if (command === "device" && parsed.subcommand === "recover") {
     const hasCodeFile = parsed.recoveryCodeFile !== undefined;
     const hasTransfer = parsed.transfer !== undefined;
     if (hasCodeFile && hasTransfer)
       throw new CliInvocationError(
-        `the device recover command accepts either --recovery-code-file <path> or --transfer <transfer-code>, not both; usage: ${usage}`,
+        withUsage(
+          "Use --recovery-code-file <path> or --transfer <transfer-code>, not both.",
+          usage,
+        ),
       );
   }
   if (
@@ -688,7 +754,10 @@ const validateCommand = (parsed: MutableArguments) => {
     !parsed.to
   )
     throw new CliInvocationError(
-      `the device transfer command requires --to <peer-device-id> with --no-input; usage: ${usage}`,
+      withUsage(
+        "With --no-input, dotrelay device transfer needs --to <peer-device-id>.",
+        usage,
+      ),
     );
   if (
     command === "device" &&
@@ -697,7 +766,10 @@ const validateCommand = (parsed: MutableArguments) => {
     !parsed.wrapperId
   )
     throw new CliInvocationError(
-      `the device revoke-wrapper command requires --wrapper-id <id> with --no-input; usage: ${usage}`,
+      withUsage(
+        "With --no-input, dotrelay device revoke-wrapper needs --wrapper-id <id>.",
+        usage,
+      ),
     );
   // Interactively the Variables to roll back are chosen by name from the
   // live Manifest; automation must name at least one.
@@ -707,7 +779,10 @@ const validateCommand = (parsed: MutableArguments) => {
     parsed.variableReferences.length === 0
   )
     throw new CliInvocationError(
-      `the rollback command requires at least one --variable <variable-name-or-id> with --no-input; usage: ${usage}`,
+      withUsage(
+        "With --no-input, dotrelay rollback needs at least one --variable <variable-name-or-id>.",
+        usage,
+      ),
     );
 };
 
@@ -748,9 +823,7 @@ export const parseArguments = (
       const value = args[index + 1];
       if (value === undefined || value.length === 0 || value.startsWith("-")) {
         const usage = usageFor(parsed.command, parsed.subcommand);
-        throw new CliInvocationError(
-          `-o needs a value${usage ? `; usage: ${usage}` : ""}`,
-        );
+        throw new CliInvocationError(withUsage("-o needs a value.", usage));
       }
       assignValue(parsed, "--output", value);
       index += 2;
@@ -759,14 +832,17 @@ export const parseArguments = (
     if (/^-[A-Za-z]/.test(token)) {
       const usage = usageFor(parsed.command, parsed.subcommand);
       throw new CliInvocationError(
-        `unknown option: ${token}; options use two dashes, such as --output${usage ? `; usage: ${usage}` : ""}`,
+        withUsage(
+          `DotRelay has no ${token} option. Options start with two dashes, such as --output.`,
+          usage,
+        ),
       );
     }
     if (token.startsWith("--")) {
       const equals = token.indexOf("=");
       const flag = equals < 0 ? token : token.slice(0, equals);
       if (forbiddenFlags.has(flag))
-        throw new CliInvocationError(`${flag} is not supported`);
+        throw new CliInvocationError(`DotRelay doesn't accept ${flag}.`);
       if (flag === "--help" || flag === "--version") {
         index += 1;
         continue;
@@ -780,7 +856,7 @@ export const parseArguments = (
         ) {
           const usage = usageFor(parsed.command, parsed.subcommand);
           throw new CliInvocationError(
-            `${flag} needs a value${usage ? `; usage: ${usage}` : ""}`,
+            withUsage(`${flag} needs a value.`, usage),
           );
         }
         assignValue(parsed, flag, value);
@@ -796,20 +872,23 @@ export const parseArguments = (
       else {
         const usage = usageFor(parsed.command, parsed.subcommand);
         throw new CliInvocationError(
-          `unknown option: ${flag}${usage ? `; usage: ${usage}` : ""}`,
+          withUsage(`DotRelay has no ${flag} option.`, usage),
         );
       }
     } else if (!parsed.command) {
       if (!COMMANDS.includes(token as CommandName))
         throw new CliInvocationError(
-          `unknown command: ${token}; run dotrelay help to list the commands`,
+          `DotRelay has no ${token} command. Run dotrelay help to see them.`,
         );
       parsed.command = token as CommandName;
     } else if (parsed.command === "run") {
       // The child command must follow --, so its own flags can never be
       // read as DotRelay flags.
       throw new CliInvocationError(
-        `put the command to run after --; usage: ${usageForLabel("run")}`,
+        withUsage(
+          "Put the command to start after --, such as dotrelay run -- npm start.",
+          usageForLabel("run"),
+        ),
       );
     } else if (
       (parsed.command === "profile" ||
@@ -828,7 +907,10 @@ export const parseArguments = (
   validateCommand(parsed);
   if (parsed.stdout && (options.stdoutIsTerminal ?? false) && !parsed.reveal)
     throw new CliInvocationError(
-      `refusing to write Values to terminal stdout; add --reveal explicitly; usage: ${usageFor(parsed.command, parsed.subcommand) ?? "dotrelay pull"}`,
+      withUsage(
+        "--stdout would print the values in your terminal. Add --reveal to allow that.",
+        usageFor(parsed.command, parsed.subcommand) ?? "dotrelay pull",
+      ),
     );
   return Object.freeze({
     ...parsed,

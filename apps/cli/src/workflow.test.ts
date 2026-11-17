@@ -1023,7 +1023,7 @@ describe("protected CLI workflows", () => {
     // trusts only its own key when the boundary names no signing Devices
     // (ADR 0023). The peer's Revision does not verify.
     expect(result.exitCode).toBe(EXIT_CODES.crypto);
-    expect(result.stderr).toContain("does not verify");
+    expect(result.stderr).toContain("doesn't verify");
     expect(result.stdout).not.toContain("postgres://example");
   });
 
@@ -1575,7 +1575,7 @@ describe("protected CLI workflows", () => {
     });
     const body = await historyJson(runtime);
     expect(body.pendingActions).toEqual([
-      "1 Member removed and 2 Devices revoked since 2026-11-01. A Team owner or admin should rotate this Project's key with dotrelay project rotate, then change the secrets they could read.",
+      "1 member removed and 2 devices revoked since 2026-11-01. Removing access doesn't erase what they already pulled. A team owner or admin should run dotrelay project rotate, then change the secrets they could read.",
     ]);
     // Advice only: a pull still completes.
     const pulled = await pullStdout(runtime);
@@ -1954,7 +1954,7 @@ describe("protected CLI workflows", () => {
     expect(result.stdout).toContain('"ok":true');
     expect(result.stdout).not.toContain("postgres://secret");
     const rendered = renderedChunks.join("");
-    expect(rendered).toContain("Classify 1 Variable from .env");
+    expect(rendered).toContain("1 new variable in .env. Who gets each value?");
     expect(rendered).toContain("DATABASE_URL");
     expect(rendered).toContain("Team");
     expect(rendered).toContain("Publish? [y/N]");
@@ -1991,7 +1991,7 @@ describe("protected CLI workflows", () => {
     expect(result.exitCode).toBe(0);
     const rendered = renderedChunks.join("");
     expect(rendered).toContain("API_KEY");
-    expect(rendered).toContain("Only you");
+    expect(rendered).toContain("Only me");
   });
 
   test("push keeps existing Variable ownership and only classifies new names", async () => {
@@ -2129,7 +2129,7 @@ describe("protected CLI workflows", () => {
       runtime,
     );
     expect(pushed.exitCode).toBe(2);
-    expect(pushed.stderr).toContain("new Variables require --classify");
+    expect(pushed.stderr).toContain("new variables need --classify");
   });
 
   test("diffs local dotenv names against the Environment without Values", async () => {
@@ -2255,10 +2255,10 @@ describe("protected CLI workflows", () => {
     expect(revealed.exitCode).toBe(0);
     expect(revealed.stdout).toContain("NEW");
     expect(revealed.stdout).toContain("+  fresh");
-    expect(revealed.stdout).toContain("CHANGED  shared");
+    expect(revealed.stdout).toContain("CHANGED  Team");
     expect(revealed.stdout).toContain("-  prev");
     expect(revealed.stdout).toContain("+  next");
-    expect(revealed.stdout).toContain("GONE  shared");
+    expect(revealed.stdout).toContain("GONE  Team");
     expect(revealed.stdout).toContain("-  old");
     const matching = await run(
       [
@@ -2293,7 +2293,7 @@ describe("protected CLI workflows", () => {
       runtime,
     );
     expect(unchanged.exitCode).toBe(0);
-    expect(unchanged.stdout).toContain("Your .env matches the Environment");
+    expect(unchanged.stdout).toContain("Your .env matches the environment");
   });
 
   test("push confirmation describes the changed Variable instead of the live count", async () => {
@@ -2423,7 +2423,9 @@ describe("protected CLI workflows", () => {
     expect(questions[1]).not.toContain("rotated");
     expect(questions[1]).not.toContain("abc123x");
     expect(questions[1]).not.toContain("postgres://secret");
-    expect(masked.stderr).toContain("publication confirmation was declined");
+    expect(masked.stderr).toContain(
+      "you didn't confirm, so nothing was published",
+    );
     expect(masked.stderr).not.toContain("rotated");
     expect(masked.stderr).not.toContain("abc123x");
     expect(masked.stderr).not.toContain("postgres://secret");
@@ -2469,7 +2471,9 @@ describe("protected CLI workflows", () => {
       },
     );
     expect(declined.exitCode).toBe(2);
-    expect(declined.stderr).toContain("Publication confirmation was declined");
+    expect(declined.stderr).toContain(
+      "You didn't confirm, so nothing was published",
+    );
     expect(declined.stderr).not.toContain("abc123x");
     expect(declined.stderr).not.toContain("postgres://secret");
     expect(declined.stdout).not.toContain("abc123x");
@@ -2679,7 +2683,9 @@ describe("protected CLI workflows", () => {
       },
     );
     expect(declined.exitCode).toBe(2);
-    expect(declined.stderr).toContain("Value reveal confirmation was declined");
+    expect(declined.stderr).toContain(
+      "You didn't confirm, so no values were printed",
+    );
     expect(declined.stderr).not.toContain("postgres://secret");
     expect(declined.stderr).not.toContain("tok");
     expect(declined.stdout).not.toContain("postgres://secret");
@@ -2728,7 +2734,7 @@ describe("protected CLI workflows", () => {
     );
     expect(pulled.exitCode).toBe(0);
     expect(questions).toEqual([]);
-    expect(pulled.stdout).toBe("No changes found\n");
+    expect(pulled.stdout).toBe(`└  ${input} already matches the environment\n`);
     expect(await Bun.file(input).text()).toBe(
       "DATABASE_URL=postgres://secret\n",
     );
@@ -2781,7 +2787,7 @@ describe("protected CLI workflows", () => {
       changedCount: 3,
       exitCode: 4,
     });
-    expect(String(diagnostic.detail)).toContain("retained");
+    expect(String(diagnostic.detail)).toContain("it was left as it is");
     expect(String(diagnostic.detail)).toContain("--force");
     expect(String(diagnostic.detail)).not.toContain("postgres://local");
     expect(await Bun.file(input).text()).toBe(
@@ -2918,7 +2924,9 @@ describe("protected CLI workflows", () => {
       { ...runtime, gitTrackingProbe: gitOutside },
     );
     expect(unchanged.exitCode).toBe(0);
-    expect(unchanged.stdout).toBe("No changes found\n");
+    expect(unchanged.stdout).toBe(
+      `└  ${output} already matches the environment\n`,
+    );
     expect(await Bun.file(output).text()).toBe(written);
   });
 
@@ -3200,7 +3208,9 @@ describe("protected CLI workflows", () => {
         gitExclusion: "established",
       });
       expect(String(body.message)).toContain(".git/info/exclude");
-      expect(String(body.message)).toContain("excluded from Git");
+      expect(String(body.message)).toContain(
+        ".git/info/exclude, so Git won't track it",
+      );
       expect(await Bun.file(`${gitDirectory}/info/exclude`).text()).toBe(
         "/.env\n/..env.*.tmp\n/.env.previous\n/..env.previous.*.tmp\n/.env.previous.1\n/..env.previous.1.*.tmp\n/.env.previous.2\n/..env.previous.2.*.tmp\n",
       );
@@ -3738,11 +3748,11 @@ describe("protected CLI workflows", () => {
     );
     expect(revealedDeclined.exitCode).toBe(2);
     expect(revealedDeclined.stderr).toContain(
-      "Rollback confirmation was declined",
+      "You didn't confirm, so nothing was rolled back",
     );
     expect(revealedDeclined.stderr).not.toContain("abc123x");
     expect(revealedDeclined.stderr).not.toContain("postgres://secret");
-    expect(questions).toEqual(["Roll back the selected Variables? [y/N]"]);
+    expect(questions).toEqual(["Roll back the selected variables? [y/N]"]);
     const rolled = await run(
       [
         "rollback",
@@ -3764,7 +3774,7 @@ describe("protected CLI workflows", () => {
       },
     );
     expect(rolled.exitCode).toBe(0);
-    expect(questions[1]).toBe("Roll back the selected Variables? [y/N]");
+    expect(questions[1]).toBe("Roll back the selected variables? [y/N]");
     expect(questions[1]).not.toContain("abc123x");
     expect(questions[1]).not.toContain("postgres://secret");
     const history = await run(
@@ -3899,11 +3909,11 @@ describe("protected CLI workflows", () => {
     expect(history.stdout).toContain(`Environment ${ids.environment}`);
     expect(history.stdout).toContain("#1");
     expect(history.stdout).toContain("#2");
-    expect(history.stdout).toContain("Genesis");
+    expect(history.stdout).toContain("Created");
     expect(history.stdout).toContain("Update");
     expect(history.stdout).toContain(genesis.request.revision.id);
     expect(history.stdout).toContain("DATABASE_URL");
-    expect(history.stdout).toContain("shared");
+    expect(history.stdout).toContain("Team");
     expect(history.stdout).toContain("value changed");
     expect(history.stdout).toContain("current");
     expect(history.stdout).toMatch(/\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/);
@@ -3982,7 +3992,7 @@ describe("protected CLI workflows", () => {
       exitCode: 2,
     });
     expect(String(diagnostic.detail)).toContain(
-      "pass the Revision id or #ordinal positionally",
+      "Pass the revision id or #number as an argument",
     );
   });
 
@@ -4010,7 +4020,7 @@ describe("protected CLI workflows", () => {
       code: "invocation",
       exitCode: 2,
     });
-    expect(String(diagnostic.detail)).toContain("pass at least one --variable");
+    expect(String(diagnostic.detail)).toContain("Pass at least one --variable");
   });
 
   test("rollback --no-input accepts a Variable name and a bare ordinal", async () => {
@@ -4056,8 +4066,8 @@ describe("protected CLI workflows", () => {
         ...runtime,
         terminal: { input: terminalInput, output: terminalOutput },
         prompt: async (question) => {
-          if (question.startsWith("Roll back to which Revision")) return "#1";
-          if (question.startsWith("Variables to roll back"))
+          if (question.startsWith("Roll back to which revision")) return "#1";
+          if (question.startsWith("Which variables should roll back"))
             return "DATABASE_URL";
           throw new Error(`unexpected prompt: ${question}`);
         },
@@ -4071,7 +4081,7 @@ describe("protected CLI workflows", () => {
     // The rendered history carried the readable selection context: the
     // operator picked a target from it without touching a JSON dump.
     const terminalText = rendered.join("");
-    expect(terminalText).toContain("Genesis");
+    expect(terminalText).toContain("Created");
     expect(terminalText).toContain(genesis.request.revision.id);
   });
 
@@ -4096,7 +4106,7 @@ describe("protected CLI workflows", () => {
     const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
     expect(diagnostic.category).toBe("invocation");
     expect(String(diagnostic.detail)).toContain(
-      "unknown Variable NOT_IN_MANIFEST",
+      "there's no variable called NOT_IN_MANIFEST",
     );
     expect(String(diagnostic.detail)).toContain("DATABASE_URL");
   });
@@ -4121,7 +4131,9 @@ describe("protected CLI workflows", () => {
     expect(result.exitCode).toBe(2);
     const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
     expect(diagnostic.category).toBe("invocation");
-    expect(String(diagnostic.detail)).toContain("not in the verified history");
+    expect(String(diagnostic.detail)).toContain(
+      "isn't in the verified history",
+    );
   });
 
   test("rollback rejects a Variable that did not exist in the target Revision", async () => {
@@ -4332,8 +4344,9 @@ describe("protected CLI workflows", () => {
         ...runtime,
         terminal: { input: terminalInput, output: terminalOutput },
         prompt: async (question) => {
-          if (question.startsWith("Roll back to which Revision")) return "#1";
-          if (question.startsWith("Variables to roll back")) return " , ";
+          if (question.startsWith("Roll back to which revision")) return "#1";
+          if (question.startsWith("Which variables should roll back"))
+            return " , ";
           throw new Error(`unexpected prompt: ${question}`);
         },
       },
@@ -4342,7 +4355,7 @@ describe("protected CLI workflows", () => {
     const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
     expect(diagnostic.category).toBe("invocation");
     expect(String(diagnostic.detail)).toContain(
-      "rollback requires at least one Variable",
+      "pick at least one variable to roll back",
     );
   });
 
@@ -5040,7 +5053,9 @@ describe("protected CLI workflows", () => {
       code: "account_key_already_exists",
       exitCode: 4,
     });
-    expect(String(diagnostic.detail)).toContain("discarded its candidate");
+    expect(String(diagnostic.detail)).toContain(
+      "this device threw away the one it made",
+    );
     expect(service.publishedWrappers()).toHaveLength(0);
     const stored = await runtime.deviceStorage
       .loadAccountKey({
@@ -5414,9 +5429,7 @@ describe("protected CLI workflows", () => {
         terminal: { input: terminalInput, output: terminalOutput },
         prompt: async (question) => {
           if (question === "Device to receive the key") return "2";
-          if (
-            question.startsWith(`Device ${second.id} is not in your signed`)
-          ) {
+          if (question.startsWith(`Device ${second.id} isn't in your signed`)) {
             questions.push(question);
             return "y";
           }
@@ -5435,7 +5448,7 @@ describe("protected CLI workflows", () => {
     // ...and an unlabeled one falls back to its Device id.
     expect(shown).toContain(second.id);
     expect(shown).toContain("holds the project key");
-    expect(shown).toContain("not in your signed Device list yet");
+    expect(shown).toContain("not in your signed device roster yet");
     // The person confirmed the reported key fingerprint, and the Device was
     // added to the signed roster before the key was sealed to it.
     expect(questions[0]).toContain(
@@ -5655,8 +5668,8 @@ describe("protected CLI workflows", () => {
     expect(shown).toContain(firstCode);
     expect(shown).toContain(secondCode);
     expect(shown).toContain(passwordId);
-    expect(shown).toContain("Recovery Code wrapper");
-    expect(shown).toContain("Password wrapper");
+    expect(shown).toContain("Recovery code wrapper");
+    expect(shown).toContain("Encryption password wrapper");
     expect(service.revokedWrappers()).toEqual([passwordId]);
   });
 
@@ -5753,7 +5766,7 @@ describe("protected CLI workflows", () => {
       exitCode: 4,
     });
     expect(String(diagnostic.detail)).toContain(
-      "at least one Recovery Code wrapper",
+      "at least one recovery code wrapper",
     );
     expect(service.revokedWrappers()).toHaveLength(0);
   });
@@ -6061,9 +6074,12 @@ describe("peer grant provisioning during ordinary reads", () => {
     // (empty) verified Revisions, and the pending action is surfaced
     // truthfully on the terminal instead of aborting or hiding it.
     expect(history.stdout).toContain(`Environment ${ids.environment}`);
-    expect(history.stdout).toContain("No Revisions have been published yet");
-    expect(rendered.join("")).toContain(
-      `Device ${peerDeviceId} is missing the Project epoch grant`,
+    expect(history.stdout).toContain(
+      "Nothing has been published to this environment yet",
+    );
+    // Notes wrap onto the rail; the words stay in order.
+    expect(rendered.join("").replace(/\n│ +/g, " ")).toContain(
+      `Your device ${peerDeviceId} doesn't have the project key yet`,
     );
     const scriptedJson = scriptGrantBootstrap(runtime, respond);
     const jsonHistory = await run(
@@ -6083,7 +6099,7 @@ describe("peer grant provisioning during ordinary reads", () => {
     expect(body.ok).toBe(true);
     expect(body.revisions).toEqual([]);
     expect(body.pendingActions).toEqual([
-      `Device ${peerDeviceId} is missing the Project epoch grant, and this Device could not share it with that Device of yours. On that Device, run dotrelay device recover if it is locked, then dotrelay pull. If it still cannot read the Project, a Team owner or admin can share the Project keys with you from the Members view of the DotRelay web app ("Share project keys").`,
+      `Your device ${peerDeviceId} doesn't have the project key yet, and this device couldn't share it. On that device, run dotrelay device recover if it's locked, then dotrelay pull. If it still can't read the project, a team owner or admin can share the project keys with you from the Members view in the DotRelay web app ("Share project keys").`,
     ]);
     expect(scripted.calls).toHaveLength(1);
     expect(scriptedJson.calls).toHaveLength(1);
@@ -7144,7 +7160,9 @@ describe("pull against an unreadable Manifest", () => {
       category: "incomplete-export",
       code: "unreadable_manifest",
     });
-    expect(String(diagnostic.detail)).toContain("Project key grant");
+    expect(String(diagnostic.detail)).toContain(
+      "can't decrypt the environment with the project key it has",
+    );
     expect(result.stdout).not.toContain("postgres://example");
     // The local file and the trusted head are preserved.
     expect(await Bun.file(output).text()).toBe(
@@ -7964,7 +7982,9 @@ describe("publication baseline reconciliation", () => {
       },
     );
     expect(pushed.exitCode).toBe(0);
-    expect(rendered.join("")).toContain("has no Publication Baseline");
+    expect(rendered.join("")).toContain(
+      "This machine has no record of pulling",
+    );
     expect(rendered.join("")).toContain("dotrelay pull first");
   });
 

@@ -96,7 +96,7 @@ const runGit: GitCommandRunner = async (directory, args) => {
 const trackingUnavailable = (path: string): CliError =>
   new CliError(
     "local-io",
-    `could not determine the Git tracking state of ${path}`,
+    `couldn't check whether Git tracks ${path}`,
     {},
     "git_tracking_unavailable",
   );
@@ -104,7 +104,7 @@ const trackingUnavailable = (path: string): CliError =>
 const exclusionFailed = (path: string): CliError =>
   new CliError(
     "local-io",
-    `could not update the repository-local Git exclusion for ${path}`,
+    `couldn't add ${path} to this repository's .git/info/exclude`,
     {},
     "git_exclusion_failed",
   );
@@ -241,7 +241,7 @@ export const ensureLocalGitExclusion = async (
   if (!info.gitDirectory || !info.topLevel || !info.relativePath)
     throw new CliError(
       "local-io",
-      "could not update the repository-local Git exclusion",
+      "couldn't update this repository's .git/info/exclude",
       {},
       "git_exclusion_failed",
     );

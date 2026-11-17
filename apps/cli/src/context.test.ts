@@ -35,7 +35,7 @@ describe("repository and worktree context", () => {
         { name: "origin", url: "git@github.com:one/project.git" },
         { name: "upstream", url: "git@github.com:two/project.git" },
       ]),
-    ).toThrow("ambiguous");
+    ).toThrow("more than one GitHub repository");
   });
 
   test("stores a verified Repository Identity with the recorded choice", async () => {
@@ -204,8 +204,8 @@ describe("explicit GitHub repository choice", () => {
     const rejection = error as CliError;
     expect(rejection.code).toBe("repository_ambiguous");
     expect(rejection.message).toContain("--remote <remote-name>");
-    expect(rejection.message).toContain("origin — my-user/DotRelay");
-    expect(rejection.message).toContain("upstream — LSP-Software/DotRelay");
+    expect(rejection.message).toContain("origin (my-user/DotRelay)");
+    expect(rejection.message).toContain("upstream (LSP-Software/DotRelay)");
     // Remote URLs may carry credentials; the diagnostic never shows one.
     expect(rejection.message).not.toContain("git@");
     expect(rejection.message).not.toContain("https://");
@@ -237,10 +237,10 @@ describe("explicit GitHub repository choice", () => {
         ],
         { remoteName: "vendor" },
       ),
-    ).rejects.toThrow("not a GitHub remote");
+    ).rejects.toThrow("doesn't point at a GitHub repository");
     await expect(
       selectGitHubRepository(forkRemotes, { remoteName: "missing" }),
-    ).rejects.toThrow("was not found");
+    ).rejects.toThrow("no Git remote called");
   });
 
   test("asks which remote identifies the repository, listing names without URLs", async () => {
@@ -259,8 +259,8 @@ describe("explicit GitHub repository choice", () => {
     expect(selection.source).toBe("interactive");
     expect(selection.remoteName).toBe("upstream");
     expect(selection.repository.owner).toBe("LSP-Software");
-    expect(renderedText).toContain("origin — my-user/DotRelay");
-    expect(renderedText).toContain("upstream — LSP-Software/DotRelay");
+    expect(renderedText).toContain("origin (my-user/DotRelay)");
+    expect(renderedText).toContain("upstream (LSP-Software/DotRelay)");
     expect(renderedText).not.toContain("git@github.com");
   });
 
@@ -314,10 +314,10 @@ describe("explicit GitHub repository choice", () => {
     expect(error).toBeInstanceOf(CliError);
     expect((error as CliError).code).toBe("repository_ambiguous");
     expect((error as CliError).message).toContain(
-      "the recorded repository choice no longer matches the Git remotes",
+      "the remote you picked before no longer points at the same repository",
     );
     expect((error as CliError).message).toContain("--remote");
-    expect((error as CliError).message).toContain("origin — my-user/DotRelay");
+    expect((error as CliError).message).toContain("origin (my-user/DotRelay)");
   });
 
   test("records only opaque identifiers, never the remote URL", async () => {

@@ -83,8 +83,8 @@ const readDotenvInput = async (inputPath: string): Promise<string> => {
     throw new CliError(
       "local-io",
       missing
-        ? `could not read the dotenv input file ${inputPath}: it does not exist. Create it, or pass --from <file> to read another file.`
-        : `could not read the dotenv input file ${inputPath}; check that it is a readable file, or pass --from <file> to read another file.`,
+        ? `couldn't read ${inputPath} because it doesn't exist. Create it, or pass --from <file> to use another file.`
+        : `couldn't read ${inputPath}. Check that it's a readable file, or pass --from <file> to use another file.`,
       {},
       "input_read_failed",
     );
@@ -126,8 +126,8 @@ export const runProtectedWorkflow = async (
       throw new CliError(
         "incomplete-export",
         groups.unreadable.length > 0
-          ? `${names} cannot be decrypted on this Device. Run dotrelay device recover, or ask a Team owner or admin to choose Share project keys for you in the web app (Members view), then try again.`
-          : `${names} are required and have no value. Add them with dotrelay push, or run dotrelay pull to enter them.`,
+          ? `${names} can't be decrypted on this device. Run dotrelay device recover, or ask a team owner or admin to choose "Share project keys" for you in the web app (Members view). Then try again.`
+          : `${names} are required but have no value. Add them with dotrelay push, or run dotrelay pull to enter them.`,
         { missingCount: blocking.length, variableNames: names.slice(0, 512) },
         "missing_values",
       );
@@ -171,14 +171,14 @@ export const runProtectedWorkflow = async (
       };
     const omission =
       optionalOmitted > 0
-        ? `\n${optionalOmitted} optional ${optionalOmitted === 1 ? "Variable has" : "Variables have"} no value and were omitted\n`
+        ? `\n${optionalOmitted} optional ${optionalOmitted === 1 ? "variable has no value and was" : "variables have no value and were"} left out\n`
         : "";
     return { stdout: `${renderEnvDiff(changes, parsed.reveal)}${omission}` };
   }
   if (parsed.command === "pull") {
     const outputPath = parsed.stdout ? undefined : (parsed.output ?? ".env");
     if (!outputPath && !parsed.stdout)
-      throw new CliInvocationError("pull requires --output <file> or --stdout");
+      throw new CliInvocationError("pull needs --output <file> or --stdout");
     // Check Git exposure before any Value is decrypted or moved: a tracked
     // output is refused up front and an untracked one gets a repository-local
     // exclusion so a later git add cannot pick the plaintext file up.
@@ -208,7 +208,7 @@ export const runProtectedWorkflow = async (
       const names = pullVariableNames(groups.unreadable);
       throw new CliError(
         "incomplete-export",
-        `${names} cannot be decrypted on this Device. Run dotrelay device recover, or ask a Team owner or admin to choose Share project keys for you in the web app (Members view), then pull again. Nothing was written.`,
+        `${names} can't be decrypted on this device. Nothing was written. Run dotrelay device recover, or ask a team owner or admin to choose "Share project keys" for you in the web app (Members view). Then pull again.`,
         {
           missingCount: groups.unreadable.length,
           variableNames: names.slice(0, 512),
@@ -222,7 +222,7 @@ export const runProtectedWorkflow = async (
       if (options.noInput)
         throw new CliError(
           "incomplete-export",
-          `${names} are required and have no value. Add them to a dotenv file and run dotrelay push, or re-run pull without --no-input to enter them. Nothing was written.`,
+          `${names} are required but have no value. Nothing was written. Add them to a dotenv file and run dotrelay push, or run pull again without --no-input to enter them.`,
           {
             missingCount: groups.requiredMissing.length,
             variableNames: names.slice(0, 512),
@@ -231,7 +231,7 @@ export const runProtectedWorkflow = async (
         );
       (options.terminal?.output ?? process.stderr).write(
         `${note(
-          `${names} are required and have no value. Enter each one; the input stays hidden.`,
+          `${names} are required but have no value. Enter each one. What you type stays hidden.`,
         )}\n`,
       );
       for (const variable of groups.requiredMissing) {
@@ -262,7 +262,7 @@ export const runProtectedWorkflow = async (
     const optionalOmitted = groups.optionalAbsent.length;
     const omissionNote =
       optionalOmitted > 0
-        ? `; ${optionalOmitted} optional ${optionalOmitted === 1 ? "Variable has" : "Variables have"} no value and were omitted`
+        ? `; ${optionalOmitted} optional ${optionalOmitted === 1 ? "variable has no value and was" : "variables have no value and were"} left out`
         : "";
     const rememberBaseline = async (): Promise<void> => {
       if (!outputPath) return;
@@ -308,14 +308,14 @@ export const runProtectedWorkflow = async (
         options,
         synced.workflow.publicationContext,
       );
-      const question = `Reveal ${entries.length} decrypted Values to stdout? [y/N]`;
+      const question = `Print ${entries.length} decrypted values to this terminal? [y/N]`;
       const frame = reviewFrame({
-        title: `Review — reveal values to stdout`,
+        title: "Print decrypted values to this terminal",
         danger: true,
         body: [
           kv(destinationRows(destination), 14),
           `  ${paint(
-            "The decrypted Values will be printed to this terminal.",
+            "The decrypted values will be printed here in plain text.",
             "faint",
           )}`,
         ].join("\n"),
@@ -323,7 +323,9 @@ export const runProtectedWorkflow = async (
       });
       (options.terminal?.output ?? process.stderr).write(`${frame}\n`);
       if (!(await confirmSilent(options, question)))
-        throw new CliInvocationError("Value reveal confirmation was declined");
+        throw new CliInvocationError(
+          "you didn't confirm, so no values were printed",
+        );
     }
     let replaceExisting = false;
     if (outputPath) {
@@ -348,7 +350,7 @@ export const runProtectedWorkflow = async (
             ...(optionalOmitted > 0 ? { optionalOmitted } : {}),
             ...(gitExclusion ? { gitExclusion } : {}),
             ...pendingActionsField(synced.workflow.pendingActions),
-            message: `No changes found${omissionNote}`,
+            message: `${outputPath} already matches the environment${omissionNote}`,
           };
         }
         const unpushed = await unpushedLocalChanges(
@@ -364,7 +366,7 @@ export const runProtectedWorkflow = async (
           if (!options.force)
             throw new CliError(
               "conflict",
-              `${outputPath} differs from the Environment and was retained; re-run with --force to replace it`,
+              `${outputPath} doesn't match the environment, so it was left as it is. Run pull again with --force to replace it.`,
               changes !== null ? { changedCount: changes.length } : {},
               "output_conflict",
             );
@@ -373,7 +375,7 @@ export const runProtectedWorkflow = async (
           if (unpushed && unpushed.length > 0 && !parsed.discardLocal)
             throw new CliError(
               "conflict",
-              `${outputPath} has local changes not yet pushed (${unpushedNames}) that this pull would discard. Nothing was written. Run dotrelay push first, or re-run with --force --discard-local to replace them.`,
+              `${outputPath} has local changes you haven't pushed (${unpushedNames}), and this pull would overwrite them. Nothing was written. Run dotrelay push first, or run pull again with --force --discard-local to replace them.`,
               {
                 changedCount: unpushed.length,
                 variableNames: unpushedNames.slice(0, 512),
@@ -387,20 +389,20 @@ export const runProtectedWorkflow = async (
           );
           const question = pullConfirmQuestion(outputPath);
           const frame = reviewFrame({
-            title: `Review — replace ${outputPath}`,
+            title: `Replace ${outputPath} with the environment's values`,
             danger: true,
             body: reviewBody(changes, destination, parsed.reveal, [
               ...pullReplacementNotes(outputPath, unpushed),
               ...(linkedTarget
                 ? [
                     `  ${paint(
-                      `${sanitizeCliLine(outputPath)} is a symlink; the write replaces ${sanitizeCliLine(linkedTarget)}`,
+                      `${sanitizeCliLine(outputPath)} is a symlink, so this replaces ${sanitizeCliLine(linkedTarget)}`,
                       "warn",
                     )}`,
                   ]
                 : []),
               `  ${paint(
-                `The current file is retained at ${outputPath}.previous`,
+                `The current file will be kept at ${outputPath}.previous`,
                 "faint",
               )}`,
             ]),
@@ -408,7 +410,9 @@ export const runProtectedWorkflow = async (
           });
           (options.terminal?.output ?? process.stderr).write(`${frame}\n`);
           if (!(await confirmSilent(options, question)))
-            throw new CliInvocationError("pull confirmation was declined");
+            throw new CliInvocationError(
+              `you didn't confirm, so ${outputPath} wasn't changed`,
+            );
         }
         replaceExisting = true;
       }
@@ -427,7 +431,7 @@ export const runProtectedWorkflow = async (
     }
     const exclusionNote =
       gitExclusion === "established"
-        ? `; ${outputPath} is excluded from Git via .git/info/exclude so it will not be tracked`
+        ? `; ${outputPath} is listed in .git/info/exclude, so Git won't track it`
         : "";
     return parsed.stdout
       ? {
@@ -443,7 +447,7 @@ export const runProtectedWorkflow = async (
           ...pendingActionsField(synced.workflow.pendingActions),
           ...(optionalOmitted > 0 ? { optionalOmitted } : {}),
           message: replaceExisting
-            ? `Wrote ${entries.length} values to ${outputPath}${linkNote}; prior file retained at ${outputPath}.previous${exclusionNote}${omissionNote}`
+            ? `Wrote ${entries.length} values to ${outputPath}${linkNote}; the old file is kept at ${outputPath}.previous${exclusionNote}${omissionNote}`
             : `Wrote ${entries.length} values to ${outputPath}${linkNote}${exclusionNote}${omissionNote}`,
         };
   }
@@ -521,7 +525,7 @@ export const runProtectedWorkflow = async (
         targetReference = (
           await ask(
             options,
-            "Roll back to which Revision (ordinal, #ordinal, or Revision id)?",
+            "Roll back to which revision? (number, #number or revision id)",
           )
         ).trim();
       } catch (error) {
@@ -530,13 +534,15 @@ export const runProtectedWorkflow = async (
         // (unlike secret prompts, which must not suggest the command line).
         if (isUnreadableTerminalError(error))
           throw new CliInvocationError(
-            "rollback needs a terminal to choose the target Revision; pass the Revision id or #ordinal positionally, or re-run with --no-input",
+            "rollback needs a terminal to pick the revision. Pass the revision id or #number as an argument, like dotrelay rollback #3, or run it again with --no-input.",
           );
         throw error;
       }
     }
     if (!targetReference)
-      throw new CliInvocationError("rollback requires a target Revision");
+      throw new CliInvocationError(
+        "say which revision to roll back to, like dotrelay rollback #3",
+      );
     const target = resolveRollbackTarget(targetReference, synced.page);
     const live = synced.variables.filter((variable) => !variable.tombstone);
     let references = parsed.variableReferences;
@@ -548,11 +554,13 @@ export const runProtectedWorkflow = async (
       );
       terminalOutput.write(
         [
-          paint("Variables in the live Manifest:", "fg"),
+          paint("Variables in the current revision:", "fg"),
           ...live.map(
             (variable) =>
               `  ${pad(sanitizeCliText(variable.name), maxName)}  ${paint(
-                classificationFromOwnership(variable.ownership),
+                classificationFromOwnership(variable.ownership) === "shared"
+                  ? "Team"
+                  : "Only me",
                 "muted",
               )}`,
           ),
@@ -564,7 +572,7 @@ export const runProtectedWorkflow = async (
           return (
             await ask(
               options,
-              'Variables to roll back (comma-separated names, or "all")?',
+              'Which variables should roll back? (names separated by commas, or "all")',
             )
           ).trim();
         } catch (error) {
@@ -572,7 +580,7 @@ export const runProtectedWorkflow = async (
           // the flag is safe here.
           if (isUnreadableTerminalError(error))
             throw new CliInvocationError(
-              "rollback needs a terminal to choose Variables; pass at least one --variable <variable-name-or-id>, or re-run with --no-input",
+              "rollback needs a terminal to pick the variables. Pass at least one --variable <variable-name-or-id>, or run it again with --no-input.",
             );
           throw error;
         }
@@ -587,7 +595,7 @@ export const runProtectedWorkflow = async (
       // An answer of only separators names no Variable; refuse it instead
       // of silently publishing nothing.
       if (references.length === 0)
-        throw new CliInvocationError("rollback requires at least one Variable");
+        throw new CliInvocationError("pick at least one variable to roll back");
     }
     const selectedIds = resolveVariableReferences(references, synced.variables);
     const selected = new Set(selectedIds);
@@ -600,7 +608,7 @@ export const runProtectedWorkflow = async (
     } catch {
       throw new CliError(
         "conflict",
-        "the target Revision is not available in verified history",
+        "that revision isn't in the verified history, so it can't be rolled back to",
         {},
         "rollback_target_unavailable",
       );
@@ -619,7 +627,7 @@ export const runProtectedWorkflow = async (
         .join(", ");
       throw new CliError(
         "conflict",
-        `${names} did not exist in the target Revision and cannot be rolled back`,
+        `${names} didn't exist in that revision, so they can't be rolled back`,
         {},
         "rollback_variable_absent",
       );
@@ -638,7 +646,5 @@ export const runProtectedWorkflow = async (
       values: targetValues,
     });
   }
-  throw new CliInvocationError(
-    "the protected workflow is not available for this command",
-  );
+  throw new CliInvocationError("this command has no encrypted workflow to run");
 };

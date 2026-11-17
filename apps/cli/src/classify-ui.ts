@@ -1,7 +1,7 @@
 import { CliInvocationError, sanitizeCliText } from "./errors";
 import { readTerminalLine, type TerminalIo } from "./terminal";
+import { bar, markLine, railText } from "./components";
 import {
-  bold,
   paint,
   type ReadableRaw,
   readRawKey,
@@ -28,14 +28,14 @@ export const toggleClassification = (
 
 export const ownershipCopy = (
   classification: VariableClassification,
-): string => (classification === "shared" ? "Team" : "Only you");
+): string => (classification === "shared" ? "Team" : "Only me");
 
 export const createClassificationBoard = (
   names: readonly string[],
   initial: Readonly<Partial<Record<string, VariableClassification>>> = {},
 ): ClassificationBoardState => {
   if (names.length === 0)
-    throw new CliInvocationError("there are no Variables to classify");
+    throw new CliInvocationError("There are no new variables to sort.");
   return Object.freeze({
     drafts: Object.freeze(
       names.map((name) =>
@@ -52,10 +52,6 @@ export const createClassificationBoard = (
 const labelWidth = (drafts: readonly ClassificationDraft[]): number =>
   Math.max(...drafts.map((draft) => draft.name.length), 8);
 
-const ownerTone = (
-  classification: VariableClassification,
-): "info" | "accent" => (classification === "shared" ? "info" : "accent");
-
 export const renderClassificationBoard = (
   state: ClassificationBoardState,
   options: Readonly<{ readonly interactive: boolean }> = {
@@ -64,34 +60,53 @@ export const renderClassificationBoard = (
 ): string => {
   const width = labelWidth(state.drafts);
   const count = state.drafts.length;
-  const title = `Classify ${count} Variable${count === 1 ? "" : "s"} from .env`;
+  const title = `${count === 1 ? "1 new variable" : `${count} new variables`} in .env. Who gets each value?`;
   const rows = state.drafts.map((draft, index) => {
     const selected = options.interactive && index === state.cursor;
     const marker = options.interactive
       ? selected
-        ? paint("▸", "brand")
-        : " "
+        ? paint("●", "brand")
+        : paint("○", "faint")
       : paint(`${index + 1}.`, "muted");
     const name = sanitizeCliText(draft.name).padEnd(width, " ");
-    const owner = ownershipCopy(draft.classification);
-    const namePaint = selected ? bold(name, "fg") : paint(name, "muted");
-    const ownerPaint = paint(
-      owner,
-      selected ? ownerTone(draft.classification) : "faint",
-    );
-    return `     ${marker}  ${namePaint}  ${ownerPaint}`;
+    // Both choices sit on the row; the current one is bracketed.
+    const choices = (["shared", "user-defined"] as const)
+      .map((choice) =>
+        choice === draft.classification
+          ? paint(`[${ownershipCopy(choice)}]`, selected ? "brand" : "fg")
+          : paint(` ${ownershipCopy(choice)} `, "faint"),
+      )
+      .join(" ");
+    return `${bar()}  ${marker} ${selected ? name : paint(name, "muted")}  ${choices}`;
   });
   const hint = options.interactive
-    ? "Space toggles who can read a Variable. Enter publishes."
-    : "Enter a number to toggle, or press Enter to publish";
+    ? "↑↓ move · space switches · enter continues"
+    : "Enter a number to switch it, or press Enter to continue";
   return [
-    `  ${paint("●", "brand")}  ${paint(title, "fg")}`,
-    "",
+    markLine("info", title),
     ...rows,
-    "",
-    `     ${paint(hint, "faint")}`,
+    railText(
+      "Team: teammates get it when they pull. Only me: each teammate sets their own.",
+      "faint",
+    ),
+    `${bar()}  ${paint(hint, "ghost")}`,
     "",
   ].join("\n");
+};
+
+/** The settled board: one line counting each choice. */
+export const renderClassificationSummary = (
+  state: ClassificationBoardState,
+): string => {
+  const team = state.drafts.filter(
+    (draft) => draft.classification === "shared",
+  ).length;
+  const mine = state.drafts.length - team;
+  const parts = [
+    ...(team > 0 ? [`${team} Team`] : []),
+    ...(mine > 0 ? [`${mine} Only me`] : []),
+  ];
+  return `${markLine("ok", `New variables ${paint(parts.join(", "), "faint")}`)}\n${bar()}\n`;
 };
 
 export const applyClassificationAction = (
@@ -112,7 +127,7 @@ export const applyClassificationAction = (
     });
   const index = action === "toggle" ? state.cursor : action - 1;
   if (!Number.isInteger(index) || index < 0 || index >= state.drafts.length)
-    throw new CliInvocationError("choose a Variable from the list");
+    throw new CliInvocationError("Choose one of the variables in the list.");
   return Object.freeze({
     drafts: Object.freeze(
       state.drafts.map((draft, draftIndex) =>
@@ -139,15 +154,16 @@ const parseLineAction = (line: string): "done" | number => {
     return "done";
   const choice = Number.parseInt(trimmed, 10);
   if (!Number.isInteger(choice))
-    throw new CliInvocationError("enter a Variable number or press Enter");
+    throw new CliInvocationError(
+      "Enter a variable's number, or press Enter to continue.",
+    );
   return choice;
 };
 
 const keyAction = (
   key: string,
 ): "up" | "down" | "toggle" | "done" | "ignore" => {
-  if (key === "\u0003")
-    throw new CliInvocationError("classification cancelled");
+  if (key === "\u0003") throw new CliInvocationError("Cancelled.");
   if (key === "\r" || key === "\n") return "done";
   if (key === " " || key === "\t" || key === "h" || key === "l")
     return "toggle";
@@ -181,6 +197,7 @@ const runRawClassificationBoard = async (
       if (action === "ignore") continue;
       if (action === "done") {
         state = applyClassificationAction(state, "done");
+        rewriteRegion(output, rendered, renderClassificationSummary(state));
         break;
       }
       state = applyClassificationAction(state, action);

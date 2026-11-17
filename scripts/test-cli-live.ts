@@ -966,7 +966,9 @@ try {
     const terminalOutput = terminal.stdout + terminal.stderr;
     if (
       terminal.exitCode !== 2 ||
-      !terminalOutput.includes("Refusing to write Values to terminal stdout") ||
+      !terminalOutput.includes(
+        "--stdout would print the values in your terminal",
+      ) ||
       terminalOutput.includes("USER_VALUE='secret'") ||
       terminalOutput.includes("SHARED_VALUE='two'")
     )
@@ -1291,7 +1293,7 @@ try {
     !mismatchedBackup.stderr.includes('"category":"crypto"') ||
     !mismatchedBackup.stderr.includes('"code":"device_bundle_invalid"') ||
     !mismatchedBackup.stderr.includes(
-      "does not match the keys registered on this Server Profile",
+      "saved keys don't match the ones the server has for it",
     )
   )
     throw new Error(

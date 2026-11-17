@@ -83,7 +83,7 @@ const validateCatalog = (value: unknown): ProfileCatalog => {
   if (value === null || typeof value !== "object" || Array.isArray(value))
     throw new CliError(
       "local-io",
-      "profile catalog is invalid",
+      "the server profile catalog is damaged",
       {},
       "profile_catalog_invalid",
     );
@@ -91,7 +91,7 @@ const validateCatalog = (value: unknown): ProfileCatalog => {
   if (object.version !== 1 || !Array.isArray(object.profiles))
     throw new CliError(
       "local-io",
-      "profile catalog is invalid",
+      "the server profile catalog is damaged",
       {},
       "profile_catalog_invalid",
     );
@@ -103,7 +103,7 @@ const validateCatalog = (value: unknown): ProfileCatalog => {
     )
       throw new CliError(
         "local-io",
-        "profile catalog is invalid",
+        "the server profile catalog is damaged",
         {},
         "profile_catalog_invalid",
       );
@@ -123,7 +123,7 @@ const validateCatalog = (value: unknown): ProfileCatalog => {
     )
       throw new CliError(
         "local-io",
-        "profile catalog is invalid",
+        "the server profile catalog is damaged",
         {},
         "profile_catalog_invalid",
       );
@@ -144,7 +144,7 @@ const validateCatalog = (value: unknown): ProfileCatalog => {
   )
     throw new CliError(
       "local-io",
-      "profile catalog selects a missing profile",
+      "the server profile catalog selects a profile it doesn't contain",
       {},
       "profile_selection_invalid",
     );
@@ -183,7 +183,7 @@ export const profileCatalogPath = (
 const missingHome = (variable: string): CliError =>
   new CliError(
     "local-io",
-    `${variable} is not set to an absolute path, so DotRelay has nowhere safe to keep its keys. Set ${variable}, or set DOTRELAY_CONFIG_DIR to the directory DotRelay should use.`,
+    `${variable} isn't set to an absolute path, so DotRelay has nowhere safe to keep its keys. Set ${variable}, or set DOTRELAY_CONFIG_DIR to the directory DotRelay should use.`,
     {},
     "state_directory_unavailable",
   );
@@ -195,9 +195,9 @@ const damagedCatalog = (path: string, code: string): CliError =>
   new CliError(
     "local-io",
     [
-      `the Server Profile catalog at ${path} is damaged and cannot be read.`,
-      "Repair it with dotrelay profile rebind <name> <origin>, or move the file aside and run dotrelay setup again with your origin (https://api.dotrelay.dev for the hosted service).",
-      "The file holds only server names, origins, and ids; Device keys and sessions are stored separately and are kept.",
+      `the server profile catalog at ${path} is damaged and can't be read.`,
+      "Fix it with dotrelay profile rebind <name> <origin>, or move the file aside and run dotrelay setup again with your server's address (https://api.dotrelay.dev for the hosted service).",
+      "The file only holds server names, addresses and ids. Device keys and sessions are stored separately and stay as they are.",
     ].join("\n"),
     {},
     code,
@@ -214,7 +214,7 @@ export const createFileProfileCatalog = (path: string): ProfileCatalogStore =>
           return emptyCatalog();
         throw new CliError(
           "local-io",
-          `could not read the Server Profile catalog at ${path}; check the file's permissions`,
+          `couldn't read the server profile catalog at ${path}. Check the file's permissions.`,
           {},
           "profile_catalog_read_failed",
         );
@@ -244,7 +244,7 @@ export const createFileProfileCatalog = (path: string): ProfileCatalogStore =>
       } catch {
         throw new CliError(
           "local-io",
-          "could not write profile catalog",
+          "couldn't save the server profile catalog",
           {},
           "profile_catalog_write_failed",
         );
@@ -267,12 +267,14 @@ const validateOrigin = (origin: string): string => {
     url = new URL(origin);
   } catch {
     throw new CliInvocationError(
-      "Server Profile origin must be an absolute URL",
+      "the server address must be a full URL, like https://api.dotrelay.dev",
     );
   }
   const loopback = loopbackHosts.includes(url.hostname);
   if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback))
-    throw new CliInvocationError("Server Profile origin must use HTTPS");
+    throw new CliInvocationError(
+      "the server address must use HTTPS. Plain HTTP only works for localhost.",
+    );
   if (
     url.origin !== origin ||
     url.username ||
@@ -282,7 +284,7 @@ const validateOrigin = (origin: string): string => {
     (url.pathname !== "/" && url.pathname !== "")
   )
     throw new CliInvocationError(
-      "Server Profile origin must be an exact origin without a path",
+      "the server address must be just the scheme and host, like https://api.dotrelay.dev, with no path, query or login",
     );
   return origin;
 };
@@ -296,7 +298,7 @@ export const profileNameFromOrigin = (origin: string): string => {
     host = new URL(origin).hostname;
   } catch {
     throw new CliInvocationError(
-      "Server Profile origin must be an absolute URL",
+      "the server address must be a full URL, like https://api.dotrelay.dev",
     );
   }
   const normalized = host
@@ -320,7 +322,7 @@ export const addServerProfile = async (
 ): Promise<CliServerProfile> => {
   if (!profileName.test(name))
     throw new CliInvocationError(
-      "profile name must contain only letters, digits, ., _, or -",
+      "profile names can only use letters, digits, ., _ and -",
     );
   const origin = validateOrigin(withDefaultProtocol(requestedOrigin));
   // Only a bare host typed by the operator may fall back to plain HTTP: an
@@ -357,7 +359,7 @@ export const addServerProfile = async (
     if (!response.ok)
       throw new CliError(
         "transient",
-        "could not read Server Profile capabilities",
+        "the server returned an error when asked what it supports. Check the address, or try again later.",
         {},
         "capabilities_unavailable",
       );
@@ -367,7 +369,7 @@ export const addServerProfile = async (
     } catch {
       throw new CliError(
         "crypto",
-        "Server Profile capabilities were not valid JSON",
+        "the server's capabilities response wasn't valid JSON. Check that this address is a DotRelay server.",
         {},
         "capabilities_invalid",
       );
@@ -387,7 +389,7 @@ export const addServerProfile = async (
           : "trust_failed";
       throw new CliError(
         "crypto",
-        "Server Profile trust could not be established",
+        "couldn't verify this server's identity. Don't trust it until you've checked the address.",
         {},
         code,
       );
@@ -410,7 +412,7 @@ export const addServerProfile = async (
         if (fallbackError instanceof NetworkAttemptError)
           throw networkFailureCliError(
             fallbackError,
-            `the Server Profile capabilities endpoint at ${loopbackHttpFallback}`,
+            `the server at ${loopbackHttpFallback}`,
             "capabilities_unavailable",
           );
         throw fallbackError;
@@ -418,7 +420,7 @@ export const addServerProfile = async (
     } else if (error instanceof NetworkAttemptError) {
       throw networkFailureCliError(
         error,
-        `the Server Profile capabilities endpoint at ${origin}`,
+        `the server at ${origin}`,
         "capabilities_unavailable",
       );
     } else {
@@ -432,7 +434,7 @@ export const addServerProfile = async (
   });
   if (options.confirm && !(await options.confirm(profile)))
     throw new CliInvocationError(
-      "Server Profile trust confirmation was declined; nothing was saved",
+      "you didn't confirm the server, so nothing was saved",
     );
   const profiles = Object.freeze([
     ...catalog.profiles.filter((candidate) => candidate.name !== name),
@@ -454,7 +456,10 @@ export const useServerProfile = async (
 ): Promise<CliServerProfile> => {
   const catalog = await store.read();
   const profile = catalog.profiles.find((candidate) => candidate.name === name);
-  if (!profile) throw new CliInvocationError("Server Profile not found");
+  if (!profile)
+    throw new CliInvocationError(
+      `there's no server profile called ${name}. Run dotrelay profile list to see the saved ones.`,
+    );
   await store.write(
     Object.freeze({ version: 1, profiles: catalog.profiles, selected: name }),
   );
@@ -506,14 +511,17 @@ export const resolveServerProfile = async (
   }
   const name = override ?? catalog.selected;
   if (!name)
-    throw new CliInvocationError(
-      `no Server Profile is selected; run ${setupHint}`,
+    throw new CliError(
+      "invocation",
+      `you haven't picked a server yet. Run ${setupHint}.`,
+      {},
+      "profile_not_selected",
     );
   const profile = catalog.profiles.find((candidate) => candidate.name === name);
   if (!profile)
     throw new CliError(
       "local-io",
-      "selected Server Profile is missing",
+      `there's no server profile called ${name}. Run dotrelay profile list to see the saved ones.`,
       {},
       "profile_selection_invalid",
     );
@@ -572,7 +580,7 @@ const discoverUnpinnedProfile = async (
     if (!response.ok)
       throw new CliError(
         "transient",
-        "could not read Server Profile capabilities",
+        "the server returned an error when asked what it supports. Check the address, or try again later.",
         {},
         "capabilities_unavailable",
       );
@@ -582,7 +590,7 @@ const discoverUnpinnedProfile = async (
     } catch {
       throw new CliError(
         "crypto",
-        "Server Profile capabilities were not valid JSON",
+        "the server's capabilities response wasn't valid JSON. Check that this address is a DotRelay server.",
         {},
         "capabilities_invalid",
       );
@@ -602,7 +610,7 @@ const discoverUnpinnedProfile = async (
           : "trust_failed";
       throw new CliError(
         "crypto",
-        "Server Profile trust could not be established",
+        "couldn't verify this server's identity. Don't trust it until you've checked the address.",
         {},
         code,
       );
@@ -622,7 +630,7 @@ const discoverUnpinnedProfile = async (
         if (fallbackError instanceof NetworkAttemptError)
           throw networkFailureCliError(
             fallbackError,
-            `the Server Profile capabilities endpoint at ${loopbackHttpFallback}`,
+            `the server at ${loopbackHttpFallback}`,
             "capabilities_unavailable",
           );
         throw fallbackError;
@@ -631,7 +639,7 @@ const discoverUnpinnedProfile = async (
     if (error instanceof NetworkAttemptError)
       throw networkFailureCliError(
         error,
-        `the Server Profile capabilities endpoint at ${origin}`,
+        `the server at ${origin}`,
         "capabilities_unavailable",
       );
     throw error;
@@ -644,10 +652,12 @@ export const rebindStatement = (
   next: Readonly<{ origin: string; pin: ServerProfilePin }>,
   invalid: boolean,
 ): string => {
-  const nextIdentity = `origin ${next.origin} with server profile ${next.pin.serverProfileId}`;
+  const nextIdentity = `${next.origin} (server id ${next.pin.serverProfileId})`;
+  const consequences =
+    "Your device keys are kept. For any environment whose history no longer verifies, the record of the last revision you trusted is reset.";
   if (invalid || !current)
-    return `The stored profile catalog is invalid and will be replaced. Re-trust profile ${name} at ${nextIdentity}. Device keys are preserved; trusted Revision continuity for Environments whose history is no longer verifiable is reset per Environment.`;
-  return `Re-trust profile ${name} at ${nextIdentity} (was origin ${current.origin} with server profile ${current.pin.serverProfileId}). Device keys are preserved; trusted Revision continuity for Environments whose history is no longer verifiable is reset per Environment.`;
+    return `The saved server profile catalog is damaged and will be replaced. Trust ${name} at ${nextIdentity}. ${consequences}`;
+  return `Trust ${name} at ${nextIdentity} instead of ${current.origin} (server id ${current.pin.serverProfileId}). ${consequences}`;
 };
 
 export const rebindServerProfile = async (
@@ -675,13 +685,15 @@ export const rebindServerProfile = async (
 > => {
   if (!profileName.test(name))
     throw new CliInvocationError(
-      "profile name must contain only letters, digits, ., _, or -",
+      "profile names can only use letters, digits, ., _ and -",
     );
   const { catalog, invalid } = await readCatalogForRepair(store);
   const current =
     catalog.profiles.find((profile) => profile.name === name) ?? null;
   if (!invalid && !current)
-    throw new CliInvocationError("Server Profile not found");
+    throw new CliInvocationError(
+      `there's no server profile called ${name}. Run dotrelay profile list to see the saved ones.`,
+    );
   const discovered = await discoverUnpinnedProfile(requestedOrigin, options);
   const identityChanged =
     invalid ||
@@ -700,7 +712,7 @@ export const rebindServerProfile = async (
     });
   if (!(await options.approve(statement)))
     throw new CliInvocationError(
-      "profile rebind was declined; nothing was saved",
+      "you didn't approve the rebind, so nothing was saved",
     );
   const backupPath = await options.backupCatalog(
     await options.catalogContents(),

@@ -163,7 +163,7 @@ describe("owed Project key rotation", () => {
 
   test("tells owners and admins what to rotate and what to change", () => {
     expect(rotationOwedNotice(owed)).toBe(
-      "2 Members removed since 2026-11-01. A Team owner or admin should rotate this Project's key with dotrelay project rotate, then change the secrets they could read.",
+      "2 members removed since 2026-11-01. Removing access doesn't erase what they already pulled. A team owner or admin should run dotrelay project rotate, then change the secrets they could read.",
     );
     expect(
       rotationOwedNotice({
@@ -171,6 +171,6 @@ describe("owed Project key rotation", () => {
         membershipRemovals: 0,
         deviceRevocations: 1,
       }),
-    ).toStartWith("1 Device revoked since 2026-11-01.");
+    ).toStartWith("1 device revoked since 2026-11-01.");
   });
 });

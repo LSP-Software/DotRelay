@@ -353,7 +353,7 @@ describe("problem codes added with Membership periods and rate limits", () => {
     expect(diagnostic.detail).toContain("system clock");
     expect(
       presentationForError(transport("authored_at_out_of_range")).title,
-    ).toBe("Clock out of range");
+    ).toBe("Check this machine's clock");
   });
 
   test("pending_invitation_limit is a conflict that says how to free a slot", () => {
@@ -377,12 +377,12 @@ describe("problem codes added with Membership periods and rate limits", () => {
       code: "rate_limited",
       retryAfterSeconds: 90,
     });
-    expect(diagnostic.detail).toContain("wait 2 minutes and retry");
+    expect(diagnostic.detail).toContain("Wait 2 minutes and retry.");
     expect(
       humanDetailForError(transport("rate_limited", { retryAfterSeconds: 1 })),
-    ).toContain("wait 1 second and retry");
+    ).toContain("Wait 1 second and retry.");
     expect(detailForProblem("rate_limited")).toBe(
-      "the Server Profile rate-limited the request; wait and retry",
+      "The server is rate-limiting requests. Wait a moment and retry.",
     );
   });
 
@@ -425,10 +425,82 @@ describe("alpha admission", () => {
       exitCode: EXIT_CODES.authentication,
     });
     const presentation = presentationForError(error);
-    expect(presentation.title).toBe("Private alpha");
+    expect(presentation.title).toBe("Not on the alpha list yet");
     expect(presentation.fixes).toEqual([
       "To use another GitHub account, run dotrelay logout, then dotrelay login.",
     ]);
+  });
+});
+
+describe("error cards", () => {
+  test("splits a closing Run sentence off as the fix", () => {
+    const presentation = presentationForError(
+      new CliError(
+        "authentication",
+        "This machine isn't enrolled. Run dotrelay device enroll.",
+        {},
+        "device_bundle_missing",
+      ),
+    );
+    expect(presentation.title).toBe("This machine isn't enrolled");
+    expect(presentation.detail).toBe("This machine isn't enrolled.");
+    expect(presentation.fixes).toEqual(["Run dotrelay device enroll"]);
+  });
+
+  test("keeps the command and drops its purpose", () => {
+    expect(
+      presentationForError(
+        new CliInvocationError(
+          "DotRelay has no bogus command. Run dotrelay help to see them.",
+        ),
+      ),
+    ).toEqual({
+      title: "Check the command",
+      detail: "DotRelay has no bogus command.",
+      fixes: ["Run dotrelay help"],
+    });
+  });
+
+  test("still splits the older '; run dotrelay' form", () => {
+    const presentation = presentationForError(
+      new CliInvocationError(
+        "this Device is not active; run dotrelay device enroll to re-authorize it",
+      ),
+    );
+    expect(presentation.detail).toBe("This Device is not active");
+    expect(presentation.fixes).toEqual(["Run dotrelay device enroll"]);
+  });
+
+  test("keeps dots inside a command, such as an origin", () => {
+    expect(
+      presentationForError(
+        new CliInvocationError(
+          "No server is set up. Run dotrelay setup https://api.dotrelay.dev.",
+        ),
+      ).fixes,
+    ).toEqual(["Run dotrelay setup https://api.dotrelay.dev"]);
+  });
+
+  test("leaves a sentence with two routes in the detail", () => {
+    const detail =
+      "This machine isn't enrolled on this server yet. Run dotrelay login, or dotrelay device enroll if you're already signed in.";
+    const presentation = presentationForError(new CliInvocationError(detail));
+    expect(presentation.detail).toBe(detail);
+    expect(presentation.fixes).toEqual([]);
+  });
+
+  test("puts a usage line under the detail", () => {
+    expect(
+      presentationForError(
+        new CliInvocationError(
+          "dotrelay setup needs the server's address.\nUsage: dotrelay setup <origin>",
+        ),
+      ),
+    ).toEqual({
+      title: "Check the command",
+      detail: "dotrelay setup needs the server's address.",
+      fixes: ["Usage: dotrelay setup <origin>"],
+    });
   });
 });
 

@@ -127,7 +127,7 @@ describe("CLI device authorization", () => {
           noOpen: true,
           fetch: async () => deviceCodeResponse({ user_code: userCode }),
         }),
-      ).rejects.toThrow("invalid device authorization response");
+      ).rejects.toThrow("sign-in response this CLI can't read");
     }
   });
 
@@ -147,7 +147,7 @@ describe("CLI device authorization", () => {
             verification_uri: "https://phishing.example/device",
           }),
       }),
-    ).rejects.toThrow("does not belong to the Server Profile");
+    ).rejects.toThrow("sign-in link for a different site");
   });
 
   test("exposes the validated URL, code, and expiry before polling", async () => {
@@ -260,7 +260,7 @@ describe("CLI device authorization", () => {
           exposedBeforeWait = poll === 1;
         },
       }),
-    ).rejects.toThrow("device authorization expired");
+    ).rejects.toThrow("The sign-in code expired");
     // The URL and code are exposed before the first poll, even on expiry.
     expect(exposedBeforeWait).toBe(true);
   });
@@ -278,7 +278,7 @@ describe("CLI device authorization", () => {
           return Response.json({ error: "access_denied" }, { status: 400 });
         },
       }),
-    ).rejects.toThrow("device authorization was denied");
+    ).rejects.toThrow("The sign-in was denied");
   });
 
   test("stops at sign-in when the account is outside the alpha list", async () => {
@@ -438,7 +438,7 @@ describe("CLI device authorization", () => {
           },
         },
       ),
-    ).rejects.toThrow("device authorization timed out");
+    ).rejects.toThrow("Sign-in timed out");
     expect(poll).toBeGreaterThanOrEqual(1);
   });
 
@@ -483,7 +483,7 @@ describe("CLI device authorization", () => {
       code: "device_authorization_unavailable",
     });
     expect(String((error as Error).message)).toContain(
-      "could not reach the device authorization endpoint at https://relay.example after 3 attempts",
+      "could not reach the server at https://relay.example after 3 attempts",
     );
     expect(calls).toBe(3);
   });
@@ -495,7 +495,7 @@ describe("CLI verification page launcher", () => {
   test("treats a nonzero launcher exit as a failure", async () => {
     await expect(
       openVerificationPage(url, () => ({ exited: Promise.resolve(1) }), 0),
-    ).rejects.toThrow("could not open the verification page");
+    ).rejects.toThrow("Couldn't open a browser");
   });
 
   test("accepts a zero launcher exit", async () => {
@@ -523,7 +523,7 @@ describe("CLI verification page launcher", () => {
         },
         0,
       ),
-    ).rejects.toThrow("could not open the verification page");
+    ).rejects.toThrow("Couldn't open a browser");
   });
 
   test("keeps sign-in moving when the launcher stays running", async () => {

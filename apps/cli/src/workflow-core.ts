@@ -279,14 +279,14 @@ export const parseBoundary = (value: Record<string, unknown>): Boundary => {
   if (!isRecord(environment) || !isRecord(session) || !isRecord(device))
     throw new CliError(
       "transient",
-      "the server returned an invalid workflow boundary",
+      "the server returned invalid details for this environment",
       {},
       "response_invalid",
     );
   const optionalString = (candidate: unknown): string | null =>
     candidate === null || candidate === undefined
       ? null
-      : requiredString(candidate, "workflow boundary field");
+      : requiredString(candidate, "environment detail");
   return Object.freeze({
     environment: Object.freeze({
       id: optionalString(environment.id),
@@ -294,7 +294,7 @@ export const parseBoundary = (value: Record<string, unknown>): Boundary => {
       teamId: optionalString(environment.teamId),
       headRevision: requiredString(
         environment.headRevision,
-        "Environment head",
+        "environment head",
       ),
       headHash: optionalString(environment.headHash),
       projectEpoch: optionalString(environment.projectEpoch),
@@ -440,7 +440,7 @@ export const hexToBytes = (value: string): Uint8Array => {
   if (!/^[0-9a-f]+$/i.test(value) || value.length % 2 !== 0)
     throw new CliError(
       "transient",
-      "the server returned an invalid Device public key",
+      "the server returned an invalid device public key",
       {},
       "response_invalid",
     );
@@ -558,15 +558,15 @@ const plural = (count: number, singular: string, pluralForm: string): string =>
 export const rotationOwedNotice = (owed: RotationOwed): string => {
   const parts = [
     ...(owed.membershipRemovals > 0
-      ? [`${plural(owed.membershipRemovals, "Member", "Members")} removed`]
+      ? [`${plural(owed.membershipRemovals, "member", "members")} removed`]
       : []),
     ...(owed.deviceRevocations > 0
-      ? [`${plural(owed.deviceRevocations, "Device", "Devices")} revoked`]
+      ? [`${plural(owed.deviceRevocations, "device", "devices")} revoked`]
       : []),
   ];
   const what = parts.length > 0 ? parts.join(" and ") : "Access removed";
   const since = sanitizeCliLine(owed.since).slice(0, 10);
-  return `${what} since ${since}. A Team owner or admin should rotate this Project's key with dotrelay project rotate, then change the secrets they could read.`;
+  return `${what} since ${since}. Removing access doesn't erase what they already pulled. A team owner or admin should run dotrelay project rotate, then change the secrets they could read.`;
 };
 
 const signerKeys = (
@@ -655,7 +655,7 @@ export const projectGrantVerification = (
   if (projectId === null)
     throw new CliError(
       "conflict",
-      "the selected Environment has no active Project context",
+      "the server didn't say which project this environment belongs to",
       {},
       "environment_context_missing",
     );
@@ -694,7 +694,7 @@ export const readTrustedHead = async (
     )
       throw new CliError(
         "crypto",
-        "the local trusted head record is invalid",
+        "this machine's record of the last verified revision is corrupt",
         {},
         "trusted_head_invalid",
       );
@@ -703,7 +703,7 @@ export const readTrustedHead = async (
     } catch {
       throw new CliError(
         "crypto",
-        "the local trusted head record is invalid",
+        "this machine's record of the last verified revision is corrupt",
         {},
         "trusted_head_invalid",
       );
@@ -720,7 +720,7 @@ export const readTrustedHead = async (
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw new CliError(
       "local-io",
-      "could not read the local trusted head record",
+      "couldn't read this machine's record of the last verified revision",
       {},
       "trusted_head_read_failed",
     );
@@ -739,7 +739,7 @@ export const safeProjectEpoch = (value: unknown): number => {
   if (epoch === null || epoch < 1n || epoch > BigInt(Number.MAX_SAFE_INTEGER))
     throw new CliError(
       "transient",
-      "the server returned an invalid Project epoch",
+      "the server returned an invalid project epoch",
       {},
       "response_invalid",
     );
@@ -771,7 +771,7 @@ export const ask = async (
   if (options.prompt) return options.prompt(question);
   if (options.noInput)
     throw new CliInvocationError(
-      "this command requires interactive input; remove --no-input to answer the prompt",
+      "this command needs to ask you something. Run it again without --no-input.",
     );
   try {
     return await readTerminalLine(question, options.terminal);
@@ -811,7 +811,7 @@ export const confirmPrompt = async (
   if (options.confirm) return options.confirm(question);
   if (options.noInput)
     throw new CliInvocationError(
-      "this command requires interactive input; remove --no-input to answer the prompt",
+      "this command needs to ask you something. Run it again without --no-input.",
     );
   if (options.prompt)
     return parseConfirmAnswer(await options.prompt(`${question} [y/N]`));
@@ -832,7 +832,7 @@ export const requireExpectedFingerprint = (
     if (options.noInput)
       throw new CliError(
         "invocation",
-        "--no-input needs --fingerprint with the Member's account fingerprint before their identity is confirmed; compare it with the one their own dotrelay team members --fingerprints shows",
+        "with --no-input, pass --fingerprint with the member's account fingerprint to confirm who they are. Ask them for the one their own dotrelay team members --fingerprints shows.",
         {},
         "account_fingerprint_required",
       );
@@ -841,7 +841,7 @@ export const requireExpectedFingerprint = (
   if (!sameFingerprint(parsed.fingerprint, fingerprint))
     throw new CliError(
       "crypto",
-      `the account fingerprint the Server Profile presents for this Member (${fingerprint}) does not match --fingerprint. Nothing was confirmed; compare it with the Member before trying again`,
+      `the server shows this member's account fingerprint as ${fingerprint}, which doesn't match --fingerprint. Nothing was confirmed. Don't trust this server until you've compared the fingerprint with the member.`,
       {},
       "account_fingerprint_mismatch",
     );
@@ -856,7 +856,7 @@ export const confirmSilent = async (
   if (options.confirm) return options.confirm(question);
   if (options.noInput)
     throw new CliInvocationError(
-      "this command requires interactive input; remove --no-input to answer the prompt",
+      "this command needs to ask you something. Run it again without --no-input.",
     );
   if (options.prompt) return parseConfirmAnswer(await options.prompt(question));
   return terminalConfirm(options, question, true);
@@ -880,7 +880,7 @@ export const responseJson = async (
   } catch {
     throw new CliError(
       "transient",
-      "the Server Profile returned invalid JSON",
+      "the server returned invalid JSON",
       {},
       "response_invalid",
     );
@@ -996,7 +996,7 @@ export const verifyDeviceBundle = async (
   if (boundary.device.id !== deviceId)
     throw new CliError(
       "authentication",
-      "the requested Device is not active",
+      "the server has a different device on record for this session",
       {},
       "device_not_active",
     );
@@ -1010,7 +1010,7 @@ export const verifyDeviceBundle = async (
   } catch {
     throw new CliError(
       "authentication",
-      "the active Device bundle is not available locally",
+      "this device's keys aren't saved on this machine",
       {},
       "device_bundle_missing",
     );
@@ -1021,7 +1021,7 @@ export const verifyDeviceBundle = async (
   } catch {
     throw new CliError(
       "crypto",
-      "the active Device bundle is invalid",
+      "this device's saved keys are corrupt",
       {},
       "device_bundle_invalid",
     );
@@ -1031,7 +1031,7 @@ export const verifyDeviceBundle = async (
   if (!encryptionPublicKey || !signingPublicKey)
     throw new CliError(
       "crypto",
-      "the Device bundle has no public key material",
+      "this device's saved keys are missing their public keys",
       {},
       "device_bundle_invalid",
     );
@@ -1053,7 +1053,7 @@ export const verifyDeviceBundle = async (
     } catch {
       throw new CliError(
         "crypto",
-        "the active Device bundle is invalid",
+        "this device's saved keys are corrupt",
         {},
         "device_bundle_invalid",
       );
@@ -1061,7 +1061,7 @@ export const verifyDeviceBundle = async (
     if (local !== registered.toLowerCase())
       throw new CliError(
         "crypto",
-        "the saved Device bundle does not match the keys registered on this Server Profile; run dotrelay device recover",
+        "this device's saved keys don't match the ones the server has for it. Run dotrelay device recover.",
         {},
         "device_bundle_invalid",
       );
@@ -1085,7 +1085,7 @@ export const loadAuthorizedDevice = async (
   if (!knownDeviceId)
     throw new CliError(
       "authentication",
-      "no Device is enrolled for this Server Profile; run dotrelay login or dotrelay device enroll",
+      "this machine isn't set up as a device on this server yet. Run dotrelay login or dotrelay device enroll.",
       {},
       "device_bundle_missing",
     );
@@ -1094,11 +1094,11 @@ export const loadAuthorizedDevice = async (
   if (!isRecord(session.user))
     throw new CliError(
       "authentication",
-      "the Server Profile returned no User identity",
+      "the server didn't say who you're signed in as. Run dotrelay login.",
       {},
       "session_invalid",
     );
-  const userId = requiredString(session.user.id, "User id");
+  const userId = requiredString(session.user.id, "user id");
   // Best-effort display-name refresh: a hostname change or a first run
   // after this feature ships is recorded without blocking the workflow.
   // Failures are ignored — the boundary still loads with the stored name.
@@ -1128,7 +1128,7 @@ export const loadAuthorizedDevice = async (
     options,
     boundary,
     knownDeviceId,
-    "the local Device is not active on this Server Profile; run dotrelay device enroll or dotrelay device recover",
+    "this device isn't active on this server. Run dotrelay device enroll or dotrelay device recover.",
   );
   return Object.freeze({
     admin,

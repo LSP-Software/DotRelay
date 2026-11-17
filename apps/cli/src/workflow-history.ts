@@ -107,16 +107,16 @@ export const revisionHistoryRows = (
 
 const mutationLabel = (mutation: number): string =>
   mutation === 1
-    ? "Genesis"
+    ? "Created"
     : mutation === 2
       ? "Update"
       : mutation === 3
         ? "Rollback"
         : mutation === 4
-          ? "Epoch transition"
+          ? "Project key rotation"
           : mutation === 5
-            ? "User-key rotation"
-            : `Mutation ${mutation}`;
+            ? "Key rotation (Only me values)"
+            : `Unknown change (${mutation})`;
 
 const mutationTone = (mutation: number): Tone =>
   mutation === 3 ? "warn" : mutation === 1 ? "accent" : "fg";
@@ -144,7 +144,7 @@ export const renderRevisionHistory = (
         sanitizeCliText(environmentId),
         "muted",
       )}`,
-      `  ${paint("No Revisions have been published yet.", "muted")}`,
+      `  ${paint("Nothing has been published to this environment yet.", "muted")}`,
       "",
     ].join("\n");
   const ordinalById = new Map(
@@ -168,7 +168,7 @@ export const renderRevisionHistory = (
         counts.get("changed") ? `${counts.get("changed")} changed` : "",
         counts.get("removed") ? `${counts.get("removed")} removed` : "",
       ].filter((part) => part.length > 0);
-      label = parts.length > 0 ? `${parts.join(", ")} — ${label}` : label;
+      label = parts.length > 0 ? `${label}: ${parts.join(", ")}` : label;
     }
     return label;
   };
@@ -193,7 +193,10 @@ export const renderRevisionHistory = (
       )}${marker}`,
     );
     for (const change of row.changes) {
-      const ownership = paint(change.ownership, "muted");
+      const ownership = paint(
+        change.ownership === "shared" ? "Team" : "Only me",
+        "muted",
+      );
       if (change.kind === "added")
         lines.push(
           `     ${paint("+", "brand")}  ${paint(sanitizeCliLine(change.name), "fg")}  ${ownership}`,

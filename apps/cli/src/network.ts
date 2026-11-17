@@ -63,8 +63,8 @@ export class NetworkAttemptError extends Error {
   ) {
     super(
       failure.kind === "stalled"
-        ? `the request stalled after ${failure.deadlineMs} ms`
-        : "the request could not be completed",
+        ? `the request got no answer within ${failure.deadlineMs} ms`
+        : "the request couldn't connect",
     );
     this.name = "NetworkAttemptError";
     this.failure = failure;

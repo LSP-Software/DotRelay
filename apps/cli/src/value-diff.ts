@@ -1,5 +1,15 @@
 import { type InlineValueHunk, splitInlineValueDiff } from "@dotrelay/client";
-import { glyph, heading, type KvRow, kv, paint, table } from "./components";
+import {
+  bar,
+  epilogue,
+  heading,
+  type KvRow,
+  kv,
+  markLine,
+  paint,
+  railLines,
+  table,
+} from "./components";
 import type { DotenvDiffChange, ValueOwnership } from "./dotenv";
 import { sanitizeCliText } from "./errors";
 import type { Tone } from "./theme";
@@ -56,11 +66,21 @@ export type RenderDiffOptions = Readonly<{
   readonly reveal?: boolean;
 }>;
 
+/** The web app's labels for the two ownership kinds. */
+export const ownershipLabel = (ownership: ValueOwnership): string =>
+  ownership === "shared" ? "Team" : "Only me";
+
 const ownershipSuffix = (ownership: ValueDiff["ownership"]): string =>
-  ownership ? `  ${paint(ownership, "muted")}` : "";
+  ownership ? `  ${paint(ownershipLabel(ownership), "muted")}` : "";
 
 const kindTone = (kind: PublicationChange["kind"]): Tone =>
-  kind === "added" ? "brand" : kind === "removed" ? "danger" : "fg";
+  kind === "added" ? "brand" : kind === "removed" ? "danger" : "warn";
+
+const kindMark = (kind: PublicationChange["kind"]): string =>
+  paint(
+    kind === "added" ? "+" : kind === "removed" ? "−" : "~",
+    kindTone(kind),
+  );
 
 export const renderMaskedChange = (
   change: Pick<PublicationChange, "name" | "kind" | "ownership">,
@@ -129,23 +149,26 @@ export const diffSummary = (
   const updated = changes.filter((change) => change.kind === "updated").length;
   const removed = changes.filter((change) => change.kind === "removed").length;
   return [
-    ...(added > 0 ? [`${added} added`] : []),
-    ...(updated > 0 ? [`${updated} updated`] : []),
-    ...(removed > 0 ? [`${removed} removed`] : []),
+    ...(added > 0 ? [paint(`${added} added`, "brand")] : []),
+    ...(updated > 0 ? [paint(`${updated} updated`, "warn")] : []),
+    ...(removed > 0 ? [paint(`${removed} removed`, "danger")] : []),
   ].join(", ");
 };
 
+// One row per change, marked + ~ −, with no Values: the name, who it
+// belongs to, and what happens to it.
 const diffTable = (
   changes: readonly Pick<PublicationChange, "name" | "kind" | "ownership">[],
 ): string =>
   table(
-    ["Variable", "Ownership", "Change"],
+    ["", "Variable", "Who", "Change"],
     changes.map((change) => [
+      kindMark(change.kind),
       sanitizeCliText(change.name),
-      change.ownership ?? null,
+      change.ownership ? ownershipLabel(change.ownership) : null,
       change.kind,
     ]),
-    changes.map((change) => ["fg", "muted", kindTone(change.kind)]),
+    changes.map((change) => [undefined, "fg", "muted", kindTone(change.kind)]),
   );
 
 const revealedBlocks = (
@@ -160,18 +183,18 @@ export const renderEnvDiff = (
   changes: readonly DotenvDiffChange[],
   reveal: boolean = false,
 ): string => {
-  const headingLine = heading("diff");
+  const headingLine = `${heading("diff")}\n${bar()}`;
   if (changes.length === 0)
     return [
       headingLine,
-      "",
-      `  ${glyph("ok")}  ${paint("Your .env matches the Environment", "brand")}`,
+      epilogue("Your .env matches the environment"),
       "",
     ].join("\n");
   const body = reveal
     ? changes
         .map((change) =>
           renderValueDiff(valueDiffFromDotenvChange(change), {
+            indent: "  ",
             reveal: true,
           }).join("\n"),
         )
@@ -183,7 +206,21 @@ export const renderEnvDiff = (
           ownership: change.ownership,
         })),
       );
-  return [headingLine, "", `${diffSummary(changes)}`, "", body, ""].join("\n");
+  const count = changes.length;
+  return [
+    headingLine,
+    markLine(
+      "ok",
+      `${count} ${count === 1 ? "difference" : "differences"} from the environment  ${diffSummary(changes)}`,
+    ),
+    bar(),
+    railLines(body),
+    bar(),
+    reveal
+      ? paint("└", "ghost")
+      : `${paint("└", "ghost")}  ${paint("Values are hidden. Add --reveal to see them.", "faint")}`,
+    "",
+  ].join("\n");
 };
 
 export type PublicationDestination = Readonly<{
@@ -217,6 +254,7 @@ export const reviewBody = (
     lines.push("");
   }
   lines.push(...extra);
+  if (extra.length > 0) lines.push("");
   lines.push(kv(destinationRows(destination), 14));
   return lines.join("\n");
 };
@@ -277,13 +315,13 @@ export const pullReplacementNotes = (
   if (unpushed === null)
     lines.push(
       `  ${paint(
-        `No Publication Baseline is recorded for ${sanitizeCliText(path)}, so local edits not yet pushed cannot be told apart from older Values.`,
+        `No pull has been recorded for ${sanitizeCliText(path)} on this machine, so edits you haven't pushed can't be told apart from older values.`,
         "warn",
       )}`,
     );
   else if (unpushed.length > 0) {
     lines.push(
-      `  ${paint("Local changes not yet pushed — will be lost:", "danger")}`,
+      `  ${paint("Changes you haven't pushed. This pull replaces them:", "danger")}`,
     );
     for (const change of unpushed)
       lines.push(
@@ -293,7 +331,7 @@ export const pullReplacementNotes = (
   }
   lines.push(
     `  ${paint(
-      `Comments, blank lines and the order of entries in ${sanitizeCliText(path)} are not preserved.`,
+      `Comments, blank lines and the order of entries in ${sanitizeCliText(path)} aren't kept.`,
       "faint",
     )}`,
   );
@@ -303,10 +341,10 @@ export const pullReplacementNotes = (
 export const publicationConfirmQuestion = (): string => "Publish? [y/N]";
 
 export const rollbackConfirmQuestion = (): string =>
-  "Roll back the selected Variables? [y/N]";
+  "Roll back the selected variables? [y/N]";
 
 export const pullConfirmQuestion = (path: string): string =>
   `Replace ${path} with decrypted values? [y/N]`;
 
 export const ROLLBACK_NOTE =
-  "This appends a new signed Rollback Revision; earlier Revisions are never rewritten or removed.";
+  "This adds a new signed revision. Earlier revisions are never rewritten or removed.";

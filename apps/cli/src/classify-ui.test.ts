@@ -33,7 +33,7 @@ describe("classification board", () => {
     expect(board).toContain("DATABASE_URL");
     expect(board).toContain("LOCAL_PATH");
     expect(board).toContain("Team");
-    expect(board).toContain("Only you");
+    expect(board).toContain("Only me");
     expect(board).not.toContain("secret");
     expect(board).not.toContain("=");
   });
