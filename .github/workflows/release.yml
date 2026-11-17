@@ -395,6 +395,9 @@ jobs:
     name: deploy prod
     needs: [prod-review-gate]
     uses: ./.github/workflows/deploy.yml
+    # A called workflow sees no secrets, not even its environment's, unless
+    # the caller passes them on.
+    secrets: inherit
     with:
       environment: security-review
       commit: ${{ github.sha }}
