@@ -224,6 +224,32 @@ Coolify S3 backup into a new database. The deploy CI jobs no longer need a
 manual migration receipt. See
 [ADR 0016](../adr/0016-hosted-deploys-migrate-at-start.md).
 
+### Deployment settings
+
+`deploy.yml` reads everything from the GitHub environment it runs in, so a
+workflow edited on another branch can read none of it. `ci.yml` deploys with
+the `dev` environment (usable only from `main`, no approval); `release.yml`
+deploys with `security-review` (an approver, `v*` tags only).
+
+| Name                   | Kind     | Meaning                                           |
+| ---------------------- | -------- | ------------------------------------------------- |
+| `COOLIFY_ENDPOINT`     | variable | Coolify base URL                                  |
+| `COOLIFY_API_APP_UUID` | variable | the environment's API application                 |
+| `COOLIFY_WEB_APP_UUID` | variable | the environment's web application                 |
+| `API_ORIGIN`           | variable | the API's exact HTTPS origin                      |
+| `WEB_ORIGIN`           | variable | the web app's exact HTTPS origin                  |
+| `SERVER_PROFILE_ID`    | variable | the API's Server Profile id, checked by the smoke |
+| `COOLIFY_TOKEN`        | secret   | Coolify API token, see below                      |
+
+Create each `COOLIFY_TOKEN` in Coolify under **Keys & Tokens → API tokens** with
+the `read`, `write` and `deploy` permissions and **access limited to that
+environment** (DotRelay → dev, or DotRelay → production). `write` is needed to
+pin the commit; the environment scope keeps the token away from every other
+Coolify resource. `security-review` also holds the Docker Hub credentials for
+the self-hosted images: the `DOCKERHUB_USERNAME` variable and the
+`DOCKERHUB_TOKEN` secret (a Docker Hub access token with Read & Write). No
+deployment credential is a repository-wide secret.
+
 ### Self-hosted images and manual maintenance
 
 The self-hosted image's entrypoint never migrates. Self-hosters (or an operator
@@ -355,9 +381,10 @@ DotRelay's hosted deployments do not pull images. Coolify builds the API and
 web apps from Git with railpack: `railpack.json` pins the runtime Bun and Node,
 and `scripts/railpack-build.sh` and `scripts/railpack-start.sh` reproduce the
 Dockerfile build and the non-root start. The apps track `main` with auto-deploy
-off. CI pins them to an exact commit (`git_commit_sha`) through the Coolify API
-and then deploys: dev gets each `main` commit that passes CI, production gets
-the commit a stable tag points at. The API applies that commit's pending
+off. The reusable `.github/workflows/deploy.yml` pins both apps to an exact
+commit (`git_commit_sha`) through the Coolify API, deploys them, waits for
+Coolify to finish and smoke-tests the live origins: dev gets each `main` commit
+that passes CI, production gets the commit an approved `v*` tag points at. The API applies that commit's pending
 migrations when it starts (see [Hosted deploys](#hosted-deploys-coolify)). The web app's `NEXT_PUBLIC_*` values are
 build-time variables in Coolify, set per environment.
 

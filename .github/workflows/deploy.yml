@@ -1,0 +1,138 @@
+name: Deploy
+
+# Deploys one hosted DotRelay environment and proves it is serving.
+#
+# Coolify builds the API and web apps from Git with railpack. This workflow pins
+# both apps to the exact commit the caller checked, starts their deployments,
+# waits for Coolify to finish, then smoke-tests the live origins. The API applies
+# pending migrations when it starts (ADR 0016).
+#
+# Everything environment-specific comes from the GitHub environment named by
+# the caller, so a workflow edited on another branch can read none of it:
+#
+#   variables  COOLIFY_ENDPOINT      e.g. https://app.coolify.io
+#              COOLIFY_API_APP_UUID  the environment's API application
+#              COOLIFY_WEB_APP_UUID  the environment's web application
+#              API_ORIGIN            e.g. https://api.dotrelay.dev
+#              WEB_ORIGIN            e.g. https://dotrelay.dev
+#              SERVER_PROFILE_ID     the API's immutable Server Profile id
+#   secret     COOLIFY_TOKEN         read + write + deploy, scoped in Coolify
+#                                    to this environment's resources only
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: GitHub environment holding this deployment's settings
+        required: true
+        type: string
+      commit:
+        description: Full 40-character commit SHA to build and deploy
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: deploy ${{ inputs.environment }} (Coolify)
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 60
+    env:
+      COMMIT: ${{ inputs.commit }}
+      COOLIFY_ENDPOINT: ${{ vars.COOLIFY_ENDPOINT }}
+      COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+      API_APP: ${{ vars.COOLIFY_API_APP_UUID }}
+      WEB_APP: ${{ vars.COOLIFY_WEB_APP_UUID }}
+      API_ORIGIN: ${{ vars.API_ORIGIN }}
+      WEB_ORIGIN: ${{ vars.WEB_ORIGIN }}
+      SERVER_PROFILE_ID: ${{ vars.SERVER_PROFILE_ID }}
+    steps:
+      - name: Check the deployment settings
+        run: |
+          set -euo pipefail
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::commit must be a full lowercase SHA"; exit 1; }
+          for name in COOLIFY_ENDPOINT COOLIFY_TOKEN API_APP WEB_APP API_ORIGIN WEB_ORIGIN SERVER_PROFILE_ID; do
+            [[ -n "${!name}" ]] || { echo "::error::$name is not configured on this environment"; exit 1; }
+          done
+          for origin in "$COOLIFY_ENDPOINT" "$API_ORIGIN" "$WEB_ORIGIN"; do
+            [[ "$origin" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] \
+              || { echo "::error::$origin must be an exact https origin"; exit 1; }
+          done
+
+      - name: Pin both apps to the commit
+        run: |
+          set -euo pipefail
+          coolify() {
+            curl --fail-with-body --silent --show-error --max-time 60 \
+              -H "Authorization: Bearer $COOLIFY_TOKEN" -H "Accept: application/json" \
+              -H "User-Agent: dotrelay-ci/2.0" "$@"
+          }
+          for app in "$API_APP" "$WEB_APP"; do
+            coolify -X PATCH -H "Content-Type: application/json" \
+              --data "$(jq -n --arg sha "$COMMIT" '{git_commit_sha: $sha}')" \
+              "$COOLIFY_ENDPOINT/api/v1/applications/$app" >/dev/null
+            pinned="$(coolify "$COOLIFY_ENDPOINT/api/v1/applications/$app" | jq -r '.git_commit_sha')"
+            [[ "$pinned" == "$COMMIT" ]] \
+              || { echo "::error::app $app is pinned to $pinned, expected $COMMIT"; exit 1; }
+          done
+
+      - name: Deploy and wait for Coolify
+        run: |
+          set -euo pipefail
+          coolify() {
+            curl --fail-with-body --silent --show-error --max-time 60 \
+              -H "Authorization: Bearer $COOLIFY_TOKEN" -H "Accept: application/json" \
+              -H "User-Agent: dotrelay-ci/2.0" "$@"
+          }
+          response="$(coolify -X POST "$COOLIFY_ENDPOINT/api/v1/deploy?uuid=$API_APP,$WEB_APP&force=false")"
+          mapfile -t deployments < <(jq -r '.deployments[]?.deployment_uuid // empty' <<<"$response")
+          if [[ "${#deployments[@]}" -ne 2 ]]; then
+            echo "::error::Coolify started ${#deployments[@]} of 2 deployments"
+            exit 1
+          fi
+          deadline=$((SECONDS + 45 * 60))
+          for deployment in "${deployments[@]}"; do
+            while :; do
+              status="$(coolify "$COOLIFY_ENDPOINT/api/v1/deployments/$deployment" | jq -r '.status // "" | ascii_downcase')"
+              case "$status" in
+                finished) echo "deployment $deployment finished"; break ;;
+                failed | canceled | cancelled | stopped)
+                  echo "::error::deployment $deployment ended $status; see its log in Coolify"
+                  exit 1 ;;
+              esac
+              (( SECONDS < deadline )) || { echo "::error::deployment $deployment still '$status' after 45 minutes"; exit 1; }
+              sleep 10
+            done
+          done
+
+      # The deployment only counts once the live origins prove the database is
+      # migrated and ready, the exact Server Profile and suite are served, the
+      # web app is healthy, and the API still refuses untrusted origins.
+      # Response bodies are never printed.
+      - name: Smoke-test the live environment
+        run: |
+          set -euo pipefail
+          fetch() {
+            curl --silent --show-error --max-time 10 --max-redirs 0 \
+              -H "Accept: application/json" -H "User-Agent: dotrelay-deployment-smoke/2" "$@"
+          }
+          check() {
+            [[ "$(fetch --fail "$API_ORIGIN/ready" | jq -c .)" == '{"status":"ready"}' ]] || return 1
+            fetch --fail "$API_ORIGIN/api/v1/capabilities" | jq -e --arg id "$SERVER_PROFILE_ID" \
+              '.serverProfileId == $id and .suite.name == "dotrelay-e2ee-v3-classical-webcrypto"' >/dev/null || return 1
+            [[ "$(fetch --fail "$WEB_ORIGIN/api/health" | jq -c .)" == '{"status":"ok"}' ]] || return 1
+            [[ "$(fetch -o /dev/null -w '%{http_code}' -H 'Origin: https://untrusted.example' \
+              "$API_ORIGIN/api/v1/session")" == "403" ]] || return 1
+          }
+          for _ in $(seq 1 12); do
+            if check; then
+              echo "Readiness, Server Profile, suite, web health and origin gate passed"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::Smoke test failed; keep traffic disabled until it passes"
+          exit 1

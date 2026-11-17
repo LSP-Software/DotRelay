@@ -110,7 +110,7 @@ Configure two on npmjs.com under **`<package>` → Settings → Trusted publishi
 | Workflow filename | Environment       | Publishes                       |
 | ----------------- | ----------------- | ------------------------------- |
 | `release.yml`     | `security-review` | tagged releases and prereleases |
-| `ci.yml`          | (none)            | the `dev` selector from `main`  |
+| `ci.yml`          | `dev`             | the `dev` selector from `main`  |
 
 Organization `LSP-Software`, repository `DotRelay`. Then choose **Publishing access → Require
 two-factor authentication and disallow tokens**; trusted publishers are unaffected. Delete the

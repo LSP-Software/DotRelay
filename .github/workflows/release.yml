@@ -131,8 +131,8 @@ jobs:
           echo "api-origin=https://api.dotrelay.dev" >> "$GITHUB_OUTPUT"
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: build and push API image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
@@ -370,11 +370,11 @@ jobs:
         run: gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
 
   # Every approved v* tag deploys production; alpha, beta and rc are versions
-  # of dotrelay.dev, admitted by the API's alpha allow-list.
-  deploy-prod:
-    name: deploy prod (Coolify)
+  # of dotrelay.dev, admitted by the API's alpha allow-list. Stable tags also
+  # need the independent review of this exact commit.
+  prod-review-gate:
+    name: production review gate
     needs: [build-cli, build-images, publish]
-    environment: security-review
     runs-on: ubuntu-latest
     steps:
       - name: Verify recorded privacy-boundary approval
@@ -382,29 +382,19 @@ jobs:
           SECURITY_REVIEW_APPROVED_SHA: ${{ vars.SECURITY_REVIEW_APPROVED_SHA }}
           SECURITY_REVIEW_REPORT_SHA256: ${{ vars.SECURITY_REVIEW_REPORT_SHA256 }}
         run: |
-          # Prereleases (alpha, beta, rc) still need an approver in the
-          # security-review environment, but not the independent review:
-          # testers must not store real secrets in them. Stable releases
-          # require the review of this exact commit.
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then
             echo "::notice::$GITHUB_REF_NAME is a prerelease without independent security review. Keep production admission restricted to the alpha allow-list."
             exit 0
           fi
           test "$SECURITY_REVIEW_APPROVED_SHA" = "$GITHUB_SHA"
           [[ "$SECURITY_REVIEW_REPORT_SHA256" =~ ^[0-9a-f]{64}$ ]]
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with: { persist-credentials: false }
-      # Coolify builds the production apps from Git with railpack, pinned to
-      # the tagged commit the security review approved. The API applies
-      # pending migrations at start (scripts/hosted-migrate.ts) before it serves.
-      - name: deploy prod apps via Coolify
-        env:
-          COOLIFY_ENDPOINT: ${{ secrets.COOLIFY_ENDPOINT }}
-          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
-        run: python3 scripts/coolify-deploy.py --environment production --commit "$GITHUB_SHA"
-      - name: smoke deployment readiness and trust boundary
-        env:
-          SMOKE_API_ORIGIN: https://api.dotrelay.dev
-          SMOKE_WEB_ORIGIN: https://dotrelay.dev
-          SMOKE_SERVER_PROFILE_ID: ${{ vars.PRODUCTION_SERVER_PROFILE_ID }}
-        run: python3 scripts/smoke-deployment.py
+
+  # Settings and the scoped Coolify token live in the `security-review`
+  # environment, which needs an approver and accepts only v* tags.
+  deploy-prod:
+    name: deploy prod
+    needs: [prod-review-gate]
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: security-review
+      commit: ${{ github.sha }}

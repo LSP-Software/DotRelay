@@ -98,7 +98,7 @@ dist-tag). For the five `@dotrelay/cli-<platform>-<arch>` packages:
    | Workflow filename | Environment       | Publishes                       |
    | ----------------- | ----------------- | ------------------------------- |
    | `release.yml`     | `security-review` | tagged releases and prereleases |
-   | `ci.yml`          | (none)            | the `dev` packages from `main`  |
+   | `ci.yml`          | `dev`             | the `dev` packages from `main`  |
 
 3. In the same settings choose **Publishing access → Require two-factor authentication and disallow
    tokens**.
