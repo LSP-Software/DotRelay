@@ -403,8 +403,17 @@ export const rotationOwedCause = (owed: RotationOwed): string =>
 
 export const enrolledDeviceRows = (
   boundary: Pick<WorkspaceBoundary, "device" | "peerDevices" | "grantsReady">,
-  options: Readonly<{ readonly thisBrowserEnrolled: boolean }>,
+  options: Readonly<{
+    readonly thisBrowserEnrolled: boolean;
+    /**
+     * True when no project is selected, or its key is wrapped by the
+     * account key: then every device holding the account key can open it,
+     * and "Waiting for project keys" would be wrong.
+     */
+    readonly keysNotPerDevice?: boolean;
+  }>,
 ): readonly EnrolledDeviceRow[] => {
+  const keysNotPerDevice = options.keysNotPerDevice === true;
   const rows: EnrolledDeviceRow[] = [];
   const seen = new Set<string>();
   if (boundary.device.id) {
@@ -412,7 +421,7 @@ export const enrolledDeviceRows = (
     rows.push({
       id: boundary.device.id,
       current: options.thisBrowserEnrolled,
-      hasEpochGrant: boundary.grantsReady,
+      hasEpochGrant: boundary.grantsReady || keysNotPerDevice,
       ...(boundary.device.name ? { name: boundary.device.name } : {}),
       ...(boundary.device.clientKind
         ? { clientKind: boundary.device.clientKind }
@@ -429,7 +438,7 @@ export const enrolledDeviceRows = (
     rows.push({
       id: peer.id,
       current: false,
-      hasEpochGrant: peer.hasEpochGrant,
+      hasEpochGrant: peer.hasEpochGrant || keysNotPerDevice,
       ...(peer.name ? { name: peer.name } : {}),
       ...(peer.clientKind ? { clientKind: peer.clientKind } : {}),
       ...(peer.osName ? { osName: peer.osName } : {}),

@@ -649,6 +649,7 @@ export const VariableRow = ({
             data-lpignore="true"
             disabled={editingDisabled}
             id={`value-${variable.id}`}
+            masked={!revealed}
             readOnly={!canEdit}
             onChange={(event) => onValueChange(event.target.value)}
             placeholder={variable.value === null ? "" : "Empty"}

@@ -1,12 +1,14 @@
 import { constants } from "node:os";
 import type { DecodedVariable } from "@dotrelay/client";
 import type { ExportFormat, ParsedArguments } from "./args";
+import { bar, GLYPHS } from "./components";
 import { type DotenvEntry, serializeDotenv } from "./dotenv";
 import { refuseProcessControlNames } from "./env-safety";
 import { CliError, sanitizeCliLine } from "./errors";
 import { assertSafeStdout } from "./output";
 import { classifyPullValues, pullVariableNames } from "./pull-values";
 import type { WorkflowOptions } from "./workflow-core";
+import { paint } from "./ui";
 import { syncWorkflow } from "./workflow-session";
 
 // `run`, `export`, and `list` read the Environment the same way `pull` does
@@ -141,9 +143,9 @@ export const renderVariableList = (
   const width = Math.max(4, ...names.map((name) => name.length));
   const lines = variables.map(
     (variable, index) =>
-      `  ${(names[index] ?? "").padEnd(width)}  ${(variable.ownership === "shared" ? "Team" : "Only me").padEnd(7)}  ${stateLabel[variable.state]}`,
+      `${bar()}  ${(names[index] ?? "").padEnd(width)}  ${(variable.ownership === "shared" ? "Team" : "Only me").padEnd(7)}  ${stateLabel[variable.state]}`,
   );
-  return `${lines.join("\n")}\n`;
+  return `${lines.join("\n")}\n${paint(GLYPHS.end, "ghost")}\n`;
 };
 
 export const listEnvironmentVariables = async (

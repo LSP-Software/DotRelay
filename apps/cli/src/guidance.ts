@@ -1,5 +1,3 @@
-import { HOSTED_ORIGIN } from "./hosted-origin";
-
 /**
  * What to tell someone when a command stops, and what the CLI can do about
  * it. Interactive runs offer the fix and carry on; scripts, CI and --json
@@ -81,7 +79,7 @@ export const guidanceFor = (
       return {
         title: "DotRelay isn't set up on this machine yet",
         explain: `Connect to a server, sign in with GitHub and enroll this machine${thenCarryOn()}. If you self-host, use your own server's address.`,
-        next: `dotrelay setup ${HOSTED_ORIGIN}`,
+        next: "dotrelay setup",
         offer: {
           question: "Set it up now?",
           accept: "Set up",

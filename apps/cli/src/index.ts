@@ -83,6 +83,7 @@ import {
 } from "./device-storage";
 import {
   CliError,
+  capitalize,
   CliInvocationError,
   categoryTitleFor,
   diagnosticForError,
@@ -106,7 +107,7 @@ import {
   renderPowerHelp,
 } from "./help";
 import { guidanceFor } from "./guidance";
-import { HOSTED_ORIGIN, setupHint } from "./hosted-origin";
+import { setupHint, setupOrigin } from "./hosted-origin";
 import { hardenLocalState } from "./local-state";
 import {
   defaultNetworkPolicy,
@@ -132,7 +133,12 @@ import {
   resetTrustedEnvironmentHistory,
 } from "./repair";
 import type { TerminalIo } from "./terminal";
-import { confirmAction, rewriteRegion, selectOption } from "./ui";
+import {
+  confirmAction,
+  rewriteRegion,
+  selectOption,
+  UNREADABLE_TERMINAL_DETAIL,
+} from "./ui";
 import { defaultOrigin, version } from "./version";
 import {
   approveDeviceEnrollment,
@@ -415,8 +421,7 @@ const statusNextAction = (value: Record<string, unknown>): string | null => {
   if (next === "run dotrelay device recover") return "dotrelay device recover";
   if (next.startsWith("run dotrelay env use"))
     return "dotrelay env use <environment-id-or-label>";
-  if (next.startsWith("run dotrelay setup"))
-    return `dotrelay setup ${HOSTED_ORIGIN}`;
+  if (next.startsWith("run dotrelay setup")) return "dotrelay setup";
   if (next === "retry when the Server Profile is reachable")
     return "dotrelay status";
   if (next === "retry dotrelay status") return "dotrelay status";
@@ -476,13 +481,22 @@ const renderStatusCard = (value: Record<string, unknown>): string => {
           : undefined,
     ),
   );
-  lines.push(statusRow("account", "GitHub", statusSessionLine(session)));
+  lines.push(
+    statusRow(
+      "account",
+      typeof value.account === "string" ? value.account : "GitHub",
+      statusSessionLine(session),
+    ),
+  );
   lines.push(statusRow("device", deviceName, statusDeviceLine(device)));
   if (typeof value.projectId === "string")
     lines.push(
       statusRow(
         "project",
-        abbreviateId(sanitizeCliText(String(value.projectId))),
+        // The repository names the project; the id is the fallback.
+        repository
+          ? repository.replace(/^github\.com\//, "")
+          : abbreviateId(sanitizeCliText(String(value.projectId))),
       ),
     );
   if (environment) {
@@ -772,7 +786,10 @@ const renderSuccess = (
     if (parsed.command === "project" && parsed.subcommand === "link")
       return `${closingLines(`Linked ${sanitizeCliLine(String(value.repository ?? "the repository"))} to this worktree`, closing)}\n`;
     if (HUMAN_HEADING_COMMANDS.has(parsed.command))
-      return `${closingLines(value.message, closing)}\n`;
+      return `${closingLines(
+        typeof value.summary === "string" ? value.summary : value.message,
+        closing,
+      )}\n`;
     return `${sanitizeCliText(value.message)}\n`;
   }
   return `${renderGenericResult(value)}\n`;
@@ -818,7 +835,7 @@ const requireEnrolledDevice = (deviceId: string | null): string => {
   if (deviceId) return deviceId;
   throw new CliError(
     "authentication",
-    "This machine isn't enrolled on this server yet. Run dotrelay login, or dotrelay device enroll if you're already signed in.",
+    "dotrelay login signs you in with GitHub and enrolls this machine as a device.",
     {},
     "device_bundle_missing",
   );
@@ -1236,6 +1253,7 @@ const verifyStatus = async (
     queriedEnvironment && contextEnvironmentId
       ? `?environment=${encodeURIComponent(contextEnvironmentId)}`
       : "";
+  let accountName: string | undefined;
   let sessionState: "verified" | "expired" | "unverified" | "not-stored" =
     sessionToken ? "unverified" : "not-stored";
   let deviceState:
@@ -1275,7 +1293,13 @@ const verifyStatus = async (
           : {}),
       });
     try {
-      await admin.get("/api/v1/session", ["authenticated", "user"]);
+      const signedIn = await admin.get("/api/v1/session", [
+        "authenticated",
+        "user",
+      ]);
+      const user = signedIn.user as { name?: unknown } | null | undefined;
+      if (typeof user?.name === "string" && user.name.trim())
+        accountName = user.name.trim();
       sessionState = "verified";
       service = "verified";
     } catch (error) {
@@ -1434,6 +1458,7 @@ const verifyStatus = async (
     origin: selected.origin,
     service,
     session: sessionState,
+    ...(accountName ? { account: accountName } : {}),
     device: deviceState,
     ...(deviceName ? { deviceName } : {}),
     nextAction,
@@ -1455,7 +1480,7 @@ const verifyStatus = async (
 };
 
 // init on a Project created in this same run: the service created a
-// "default" Environment with the Project, but the operator named another
+// "development" Environment with the Project, but the operator named another
 // label. That label becomes the Environment published into, and the empty
 // default is archived (best effort) so teammates are not later asked to
 // choose between it and the real one.
@@ -1530,9 +1555,9 @@ const renderEnvironmentList = (
     ]
       .filter((part): part is string => part !== null)
       .join(" · ");
-    return `  ${marker}  ${selected ? bold(label) : label}  ${paint(entry.id, "faint")}${state ? `  ${paint(state, "muted")}` : ""}`;
+    return `${bar()}  ${marker}  ${selected ? bold(label) : label}  ${paint(entry.id, "faint")}${state ? `  ${paint(state, "muted")}` : ""}`;
   });
-  return `${lines.join("\n")}\n`;
+  return `${lines.join("\n")}\n${paint(GLYPHS.end, "ghost")}\n`;
 };
 
 const HUMAN_HEADING_COMMANDS = new Set([
@@ -1548,6 +1573,7 @@ const HUMAN_HEADING_COMMANDS = new Set([
   "device",
   "project",
   "env",
+  "list",
 ]);
 
 const execute = async (
@@ -1597,12 +1623,7 @@ const execute = async (
   await hardenLocalState(runtime.stateDirectory ?? dirname(catalogPath));
   const store = createFileProfileCatalog(catalogPath);
   if (parsed.command === "setup") {
-    const rawOrigin = parsed.positionals[0];
-    if (!rawOrigin)
-      throw new CliInvocationError(
-        "dotrelay setup needs the server's address.",
-      );
-    const origin = withDefaultProtocol(rawOrigin);
+    const origin = withDefaultProtocol(parsed.positionals[0] ?? setupOrigin);
     const catalog = await store.read();
     const existing = catalog.profiles.find(
       (profile) => profile.origin === origin,
@@ -1936,10 +1957,6 @@ const execute = async (
     };
   }
   if (parsed.command === "project" && parsed.subcommand === "rotate") {
-    if (parsed.noInput && !parsed.profile)
-      throw new CliInvocationError(
-        "With --no-input, dotrelay project rotate needs --profile <name>.",
-      );
     const profile = await resolveServerProfile(
       store,
       parsed.profile,
@@ -2039,10 +2056,6 @@ const execute = async (
     };
   }
   if (parsed.command === "account") {
-    if (parsed.noInput && !parsed.profile)
-      throw new CliInvocationError(
-        `With --no-input, dotrelay account ${parsed.subcommand} needs --profile <name>.`,
-      );
     const profile = await resolveServerProfile(
       store,
       parsed.profile,
@@ -2066,10 +2079,6 @@ const execute = async (
     };
   }
   if (parsed.command === "team") {
-    if (parsed.noInput && !parsed.profile)
-      throw new CliInvocationError(
-        `With --no-input, dotrelay team ${parsed.subcommand} needs --profile <name>.`,
-      );
     const profile = await resolveServerProfile(
       store,
       parsed.profile,
@@ -2354,9 +2363,9 @@ const execute = async (
     ];
     const lines = devices.map(
       (device) =>
-        `  ${device.current ? paint("▸", "brand") : paint("·", "ghost")}  ${sanitizeCliLine(device.name ?? "unnamed device")}  ${paint(device.id, "faint")}${device.current ? `  ${paint("this device", "muted")}` : ""}${
+        `${bar()}  ${device.current ? paint("▸", "brand") : paint("·", "ghost")}  ${sanitizeCliLine(device.name ?? "unnamed device")}  ${paint(device.id, "faint")}${device.current ? `  ${paint("this device", "muted")}` : ""}${
           "fingerprint" in device && device.fingerprint
-            ? `\n     ${paint(`key fingerprint ${device.fingerprint}`, "muted")}`
+            ? `\n${bar()}     ${paint(`key fingerprint ${device.fingerprint}`, "muted")}`
             : ""
         }`,
     );
@@ -2370,7 +2379,7 @@ const execute = async (
               stdout:
                 devices.length === 0
                   ? `${note("No active devices. Run dotrelay login to enroll this machine.")}\n`
-                  : `${lines.join("\n")}\n`,
+                  : `${lines.join("\n")}\n${paint(GLYPHS.end, "ghost")}\n`,
             }),
       },
     };
@@ -2390,10 +2399,6 @@ const execute = async (
     parsed.command === "device" &&
     deviceTrustCommands.has(parsed.subcommand ?? "")
   ) {
-    if (parsed.noInput && !parsed.profile)
-      throw new CliInvocationError(
-        `With --no-input, dotrelay device ${parsed.subcommand} needs --profile <name>.`,
-      );
     const profile = await resolveServerProfile(
       store,
       parsed.profile,
@@ -2488,10 +2493,6 @@ const execute = async (
     "list",
   ]);
   if (protectedCommands.has(parsed.command)) {
-    if (parsed.noInput && !parsed.profile)
-      throw new CliInvocationError(
-        `With --no-input, dotrelay ${parsed.command} needs --profile <name>.`,
-      );
     const profile = await resolveServerProfile(
       store,
       parsed.profile,
@@ -2685,11 +2686,18 @@ const execute = async (
       const ask = async (question: string): Promise<string> => {
         if (runtime.prompt) return runtime.prompt(question);
         const { readTerminalLine } = await import("./terminal");
-        return readTerminalLine(question, runtime.terminal);
+        try {
+          return await readTerminalLine(
+            `${glyph("info")}  ${question}`,
+            runtime.terminal,
+          );
+        } catch {
+          throw new CliInvocationError(UNREADABLE_TERMINAL_DETAIL);
+        }
       };
       const write = (message: string): void => {
         const output = runtime.terminal?.output ?? process.stderr;
-        output.write(message);
+        output.write(`${railText(message.trimEnd())}\n`);
       };
       const explicitEnvironmentReference =
         parsed.environment ??
@@ -2946,11 +2954,11 @@ class GuidanceDeclined extends Error {
 }
 
 const chooseServer = async (runtime: CliRuntime): Promise<string> => {
-  const hosted = new URL(HOSTED_ORIGIN).host;
+  const hosted = new URL(setupOrigin).host;
   const choice = await selectOption(
     "Which server?",
     [
-      { id: HOSTED_ORIGIN, label: hosted, detail: "hosted by DotRelay" },
+      { id: setupOrigin, label: hosted, detail: "hosted by DotRelay" },
       { id: "other", label: "Another server", detail: "type its address" },
     ],
     {
@@ -3138,6 +3146,17 @@ export const run = async (
         exitCode: diagnostic.exitCode,
         stdout: "",
         stderr: json(next ? { ...diagnostic, next } : diagnostic),
+      };
+    // Saying no at a confirmation isn't a mistake to correct: end calmly
+    // with what didn't happen, not a "Check the command" card.
+    const declinedConfirmation = /^you didn't confirm, so (.+?)\.?$/su.exec(
+      diagnostic.detail,
+    );
+    if (declinedConfirmation?.[1] && diagnostic.category === "invocation")
+      return {
+        exitCode: diagnostic.exitCode,
+        stdout: "",
+        stderr: `${paint(GLYPHS.end, "ghost")}  ${capitalize(declinedConfirmation[1])}\n`,
       };
     // "Check the command" says less than an invocation error's own first
     // sentence, so that sentence becomes the headline:

@@ -44,6 +44,9 @@ export const describeCliClient = (
     displayName: machine,
     clientKind: "cli",
     osName: os,
-    clientSummary: sanitizeDeviceClientSummary("dotrelay-cli"),
+    // Matches the browser's "Chrome 140 on Linux" style.
+    clientSummary: sanitizeDeviceClientSummary(
+      os === "unknown" ? "DotRelay CLI" : `DotRelay CLI on ${os}`,
+    ),
   });
 };

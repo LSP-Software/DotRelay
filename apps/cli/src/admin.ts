@@ -229,7 +229,7 @@ const parseEnvironment = (value: unknown): EnvironmentSummary => {
     label:
       typeof value.label === "string" && value.label.trim().length > 0
         ? value.label.trim()
-        : "default",
+        : "development",
     lifecycle: requireLifecycle(value.lifecycle, "environment lifecycle"),
     currentHeadId:
       value.currentHeadId === null
@@ -633,7 +633,7 @@ export const resolveEnvironmentReference = async (
 export const createEnvironment = async (
   client: Pick<StrictJsonClient, "post">,
   projectId: string,
-  label = "default",
+  label = "development",
 ): Promise<EnvironmentSummary> => {
   const response = await client.post(
     `/api/v1/projects/${encodeURIComponent(requireOpaqueId(projectId, "project id"))}/environments`,

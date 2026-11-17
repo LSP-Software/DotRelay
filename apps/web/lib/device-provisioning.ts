@@ -1,15 +1,11 @@
 import {
   createBrowserDeviceStorage,
   createDeviceBootstrap,
-  createDeviceEnrollmentRequest,
   createProjectEpochGrantBootstrap,
   type DeviceBootstrap,
-  type DeviceKeyMaterial,
-  loadDeviceKeyMaterial,
   probeBrowserDeviceStorage,
   uuidToBytes,
 } from "@dotrelay/client";
-import { sha384 } from "@dotrelay/contracts";
 import type { Dispatch, SetStateAction } from "react";
 import { bytesToHex } from "@/lib/account-keys";
 import {
@@ -51,13 +47,9 @@ import {
 // A Device bootstrap awaiting completion: the local keys and the
 // operation identity an earlier attempt committed, retained so a retry
 // replays the same bootstrap instead of duplicating the remote Device.
-// When the bootstrap is rejected because the User already has a Device, the
-// same local keys start a Device enrollment instead; the enrollment's
-// expiry is retained so a retry replays that enrollment too.
 export type PendingEnrollment = Readonly<{
   readonly bootstrap: DeviceBootstrap;
   readonly operationId: string;
-  readonly enrollmentExpiresAtMs?: number;
 }>;
 
 export type DeviceProvisioningContext = Readonly<{
@@ -132,6 +124,9 @@ export const bootstrapFailureMessage = (
   }
 };
 
+export const ACCOUNT_EXISTS_MESSAGE =
+  "This account is already set up on another device. Enter the recovery code you saved then to unlock this browser.";
+
 export const provisionBrowserDevice = async (
   ctx: DeviceProvisioningContext,
 ): Promise<void> => {
@@ -181,10 +176,6 @@ export const provisionBrowserDevice = async (
         pinKey,
         Object.freeze({ bootstrap, operationId }),
       );
-    // True once the setup went through a Device enrollment instead of the
-    // first-Device bootstrap: the Device is only pending until an existing
-    // Device approves it, so no epoch grant can be seeded yet.
-    let viaEnrollment = false;
     let response: Response;
     try {
       response = await fetch(`${apiOrigin}/api/v1/devices/bootstrap`, {
@@ -230,18 +221,13 @@ export const provisionBrowserDevice = async (
             retryAfterSecondsFrom(body, response.headers),
           ),
         );
-      // Bootstrap creates the User's first Device only. When the User
-      // already has an active Device, this browser joins through an
-      // enrollment: its own keys start a self-signed request that one of
-      // the User's existing Devices approves.
-      await beginBrowserDeviceEnrollment(
-        ctx,
-        pin,
-        pinKey,
-        bootstrap,
-        operationId,
-      );
-      viaEnrollment = true;
+      // Bootstrap creates the User's first Device only, so a conflict means
+      // the account already has one. Nothing in the web app can approve a
+      // browser's enrollment request, so starting one would only leave a
+      // pending Device nobody can activate. The recovery code unlocks this
+      // browser instead, and creates its Device when it does.
+      ctx.pendingEnrollment.delete(pinKey);
+      throw new ProvisioningMessage(ACCOUNT_EXISTS_MESSAGE);
     }
     const persistDeviceLocally = async (): Promise<
       "complete" | "records" | "device-id"
@@ -297,7 +283,6 @@ export const provisionBrowserDevice = async (
         (peer) => peer.hasEpochGrant,
       );
       if (
-        !viaEnrollment &&
         !otherDeviceExists &&
         !peerHoldsEpochKey &&
         environment.projectId &&
@@ -371,23 +356,7 @@ export const provisionBrowserDevice = async (
     } else {
       onOffline();
     }
-    if (viaEnrollment) {
-      if (persistence === "complete") {
-        onMessage((current) =>
-          current?.includes("pending")
-            ? current
-            : "This browser is ready to join this account. Approve its enrollment on one of your other devices, then reload this page.",
-        );
-      } else if (persistence === "records") {
-        onMessage(
-          "The server started this browser's enrollment, but the browser couldn't save its keys. Access won't survive a reload. Retry setup to save the keys.",
-        );
-      } else {
-        onMessage(
-          "The server started this browser's enrollment, but the browser couldn't save its device ID. Access won't survive a reload. Retry setup to save the ID.",
-        );
-      }
-    } else if (persistence === "complete") {
+    if (persistence === "complete") {
       onMessage((current) =>
         current?.includes("pending")
           ? current
@@ -410,117 +379,6 @@ export const provisionBrowserDevice = async (
     );
   } finally {
     onInProgress(false);
-  }
-};
-
-// Starts the bootstrap's keys as a self-signed Device enrollment request.
-// The request's expiry is kept in the pending enrollment so an in-page
-// retry replays the same enrollment instead of starting a duplicate one.
-const beginBrowserDeviceEnrollment = async (
-  ctx: DeviceProvisioningContext,
-  pin: Readonly<{
-    readonly serverProfileId: string;
-    readonly origin: string;
-  }>,
-  pinKey: string,
-  bootstrap: DeviceBootstrap,
-  operationId: string,
-): Promise<void> => {
-  const { apiOrigin } = ctx;
-  const { keyMaterial } = bootstrap;
-  const userId = ctx.boundary.session.userId;
-  if (!userId)
-    throw new ProvisioningMessage("Sign in before setting up this browser.");
-  if (!keyMaterial.encryptionPublicKey || !keyMaterial.signingPublicKey)
-    throw new ProvisioningMessage(
-      "This browser can't prepare its enrollment request. Try again.",
-    );
-  const pending = ctx.pendingEnrollment.get(pinKey);
-  const enrollmentExpiresAtMs =
-    pending?.enrollmentExpiresAtMs ?? Date.now() + 10 * 60 * 1000;
-  if (pending?.enrollmentExpiresAtMs === undefined)
-    ctx.pendingEnrollment.set(
-      pinKey,
-      Object.freeze({
-        bootstrap,
-        operationId,
-        enrollmentExpiresAtMs,
-      }),
-    );
-  const request = await createDeviceEnrollmentRequest({
-    serverProfileId: pin.serverProfileId,
-    origin: pin.origin,
-    userId,
-    identityGeneration: bootstrap.identityGeneration,
-    initiatorDeviceId: bootstrap.deviceId,
-    initiatorSigningPrivateKey: keyMaterial.signingPrivateKey,
-    initiatorSigningPublicKey: new Uint8Array(
-      await globalThis.crypto.subtle.exportKey(
-        "raw",
-        keyMaterial.signingPublicKey,
-      ),
-    ).slice(0, 32),
-    expiresAtMs: enrollmentExpiresAtMs,
-    deviceId: bootstrap.deviceId,
-    keyMaterial: {
-      encryptionPrivateKey: keyMaterial.encryptionPrivateKey,
-      signingPrivateKey: keyMaterial.signingPrivateKey,
-      encryptionPublicKey: keyMaterial.encryptionPublicKey,
-      signingPublicKey: keyMaterial.signingPublicKey,
-    },
-  });
-  let response: Response;
-  try {
-    response = await fetch(`${apiOrigin}/api/v1/devices/enrollments`, {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-        "Idempotency-Key": operationId,
-      },
-      body: JSON.stringify({
-        operationId,
-        enrollmentId: request.ids.enrollmentId,
-        userId,
-        transcriptHash: bytesToHex(request.transcriptHash),
-        challengeHash: bytesToHex(await sha384(request.challenge)),
-        expiresAt: new Date(request.expiresAtMs).toISOString(),
-        deviceId: request.ids.deviceId,
-        identityGeneration: String(bootstrap.identityGeneration),
-        x25519PublicKey: toBase64(bootstrap.x25519PublicKey),
-        ed25519PublicKey: toBase64(bootstrap.ed25519PublicKey),
-        keyId: toBase64(bootstrap.keyId),
-        certificateObjectId: globalThis.crypto.randomUUID(),
-        certificateObject: toBase64(request.certificateBytes),
-        client: (() => {
-          const info = describeThisBrowser();
-          return {
-            displayName: info.displayName,
-            clientKind: info.clientKind,
-            ...(info.osName ? { osName: info.osName } : {}),
-            ...(info.clientSummary
-              ? { clientSummary: info.clientSummary }
-              : {}),
-          };
-        })(),
-      }),
-    });
-  } catch {
-    throw new ProvisioningMessage(
-      "We couldn't reach the server. Check your connection and try again.",
-    );
-  }
-  if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as {
-      readonly code?: unknown;
-    } | null;
-    const code = typeof body?.code === "string" ? body.code : null;
-    throw new ProvisioningMessage(
-      bootstrapFailureMessage(
-        code,
-        retryAfterSecondsFrom(body, response.headers),
-      ),
-    );
   }
 };
 

@@ -97,7 +97,14 @@ export const runProtectedWorkflow = async (
 ): Promise<Record<string, unknown> | { stdout: string }> => {
   if (parsed.command === "history") {
     const synced = await syncWorkflow(options, parsed);
-    if (!parsed.json) return { stdout: renderSyncedHistory(synced) };
+    if (!parsed.json) {
+      const { environment } = await destinationFor(
+        options,
+        synced.workflow.publicationContext,
+        synced.workflow.deviceId,
+      );
+      return { stdout: renderSyncedHistory(synced, environment) };
+    }
     return {
       revisions: synced.page.revisions.map((revision) => ({
         id: revision.id,
@@ -307,6 +314,7 @@ export const runProtectedWorkflow = async (
       const destination = await destinationFor(
         options,
         synced.workflow.publicationContext,
+        synced.workflow.deviceId,
       );
       const question = `Print ${entries.length} decrypted values to this terminal? [y/N]`;
       const frame = reviewFrame({
@@ -386,6 +394,7 @@ export const runProtectedWorkflow = async (
           const destination = await destinationFor(
             options,
             synced.workflow.publicationContext,
+            synced.workflow.deviceId,
           );
           const question = pullConfirmQuestion(outputPath);
           const frame = reviewFrame({
@@ -520,7 +529,12 @@ export const runProtectedWorkflow = async (
     // ids out of a JSON dump; automation still passes them explicitly.
     let targetReference = (parsed.positionals[0] ?? "").trim();
     if (!targetReference && !options.noInput) {
-      terminalOutput.write(renderSyncedHistory(synced));
+      const { environment } = await destinationFor(
+        options,
+        synced.workflow.publicationContext,
+        synced.workflow.deviceId,
+      );
+      terminalOutput.write(renderSyncedHistory(synced, environment));
       try {
         targetReference = (
           await ask(

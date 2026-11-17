@@ -67,6 +67,8 @@ const recoveryFormatDate = (iso: string | undefined): string => {
 
 export type RecoveryAreaProps = Readonly<{
   readonly setupMode?: boolean;
+  /** The account already has a device, so only the recovery code can unlock this browser. */
+  readonly accountExistsElsewhere?: boolean;
   readonly sessionActive: boolean;
   readonly deviceActive: boolean;
   readonly connection: "loading" | "online" | "offline";
@@ -140,6 +142,7 @@ export type RecoveryAreaProps = Readonly<{
 
 export const RecoveryArea = ({
   setupMode = false,
+  accountExistsElsewhere = false,
   sessionActive,
   deviceActive,
   connection,
@@ -235,17 +238,21 @@ export const RecoveryArea = ({
       ) : !deviceActive ? (
         <Card className="mt-6" data-testid="recovery-device-setup">
           <CardHeader>
-            <CardTitle>Set up this browser</CardTitle>
+            <CardTitle>
+              {accountExistsElsewhere
+                ? "Unlock this browser"
+                : "Set up this browser"}
+            </CardTitle>
             <CardDescription>
               This browser needs its own keys to open your workspace.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-sm text-muted-foreground">
-              Lost your other devices? Recover this browser with your saved
-              Recovery Code.
+              Already use DotRelay in the CLI or another browser? Unlock this
+              browser with the recovery code you saved then.
             </p>
-            <Label htmlFor="lost-device-recovery-code">Recovery Code</Label>
+            <Label htmlFor="lost-device-recovery-code">Recovery code</Label>
             <Input
               id="lost-device-recovery-code"
               type="password"
@@ -260,7 +267,7 @@ export const RecoveryArea = ({
               }
               onClick={() => onUnlock("recovery-code", unlockInput)}
             >
-              Recover browser
+              Unlock with recovery code
             </Button>
           </CardContent>
           {deviceSetupInProgress ? (
@@ -270,7 +277,7 @@ export const RecoveryArea = ({
             >
               Setting up this browser…
             </CardContent>
-          ) : (
+          ) : accountExistsElsewhere ? null : (
             <CardFooter>
               <Button onClick={() => void onDeviceSetup()}>
                 Set up browser

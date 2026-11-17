@@ -1,7 +1,7 @@
 "use client";
 
 import { LoaderCircle } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { GitHubMark } from "@/components/site-shell";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -11,6 +11,8 @@ type GitHubSignInButtonProps = Readonly<{
   readonly callbackUrl: string;
   readonly errorCallbackURL?: string;
   readonly className?: string;
+  /** Start the GitHub sign-in as soon as the button mounts. */
+  readonly autoStart?: boolean;
 }>;
 
 export const GitHubSignInButton = ({
@@ -18,9 +20,11 @@ export const GitHubSignInButton = ({
   callbackUrl,
   errorCallbackURL,
   className,
+  autoStart = false,
 }: GitHubSignInButtonProps) => {
   const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
+  const [pending, setPending] = useState(autoStart);
+  const autoStarted = useRef(false);
 
   const continueWithGitHub = async () => {
     setError(null);
@@ -55,6 +59,14 @@ export const GitHubSignInButton = ({
       setPending(false);
     }
   };
+
+  // Starts once, on mount; the ref stops React's development double run.
+  useEffect(() => {
+    if (!autoStart || autoStarted.current) return;
+    autoStarted.current = true;
+    void continueWithGitHub();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once, on mount
+  }, []);
 
   return (
     <div className="space-y-3">

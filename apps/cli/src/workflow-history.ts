@@ -4,9 +4,10 @@ import {
   type SyncPageWire,
 } from "@dotrelay/client";
 import type { SyncRevisionWire } from "@dotrelay/contracts";
-import { heading } from "./components";
+import { bar, GLYPHS, heading } from "./components";
 import { sanitizeCliLine, sanitizeCliText } from "./errors";
 import type { Tone } from "./theme";
+
 import { paint } from "./ui";
 import { classificationFromOwnership } from "./workflow-publication";
 import type { syncWorkflow } from "./workflow-session";
@@ -133,18 +134,24 @@ const revisionDate = (authoredAtMs: bigint): string => {
 // pick a Rollback target without decrypting anything, while `--json` keeps
 // the documented revision metadata for automation.
 export const renderRevisionHistory = (
-  environmentId: string,
+  environment: string,
   rows: readonly RevisionHistoryRow[],
 ): string => {
+  // History reads like every other command: each line on the rail, and a
+  // closing mark.
   const headingLine = heading("history");
+  const end = paint(GLYPHS.end, "ghost");
+  const environmentLine = `${bar()}  ${paint("Environment", "faint")} ${paint(
+    sanitizeCliText(environment),
+    "muted",
+  )}`;
   if (rows.length === 0)
     return [
       headingLine,
-      `  ${paint("Environment", "faint")} ${paint(
-        sanitizeCliText(environmentId),
-        "muted",
-      )}`,
-      `  ${paint("Nothing has been published to this environment yet.", "muted")}`,
+      bar(),
+      environmentLine,
+      `${bar()}  ${paint("Nothing has been published to this environment yet.", "muted")}`,
+      end,
       "",
     ].join("\n");
   const ordinalById = new Map(
@@ -172,19 +179,11 @@ export const renderRevisionHistory = (
     }
     return label;
   };
-  const lines: string[] = [
-    headingLine,
-    "",
-    `  ${paint("Environment", "faint")} ${paint(
-      sanitizeCliText(environmentId),
-      "muted",
-    )}`,
-    "",
-  ];
+  const lines: string[] = [headingLine, bar(), environmentLine, bar()];
   for (const row of rows) {
     const marker = row.current ? paint("  current", "brand") : "         ";
     lines.push(
-      `  ${paint(`#${row.ordinal}`, "muted")}  ${paint(
+      `${bar()}  ${paint(`#${row.ordinal}`, "muted")}  ${paint(
         revisionDate(row.revision.authoredAtMs),
         "fg",
       )}  ${paint(sanitizeCliLine(row.revision.id), "faint")}  ${paint(
@@ -199,29 +198,30 @@ export const renderRevisionHistory = (
       );
       if (change.kind === "added")
         lines.push(
-          `     ${paint("+", "brand")}  ${paint(sanitizeCliLine(change.name), "fg")}  ${ownership}`,
+          `${bar()}     ${paint("+", "brand")}  ${paint(sanitizeCliLine(change.name), "fg")}  ${ownership}`,
         );
       else if (change.kind === "removed")
         lines.push(
-          `     ${paint("-", "danger")}  ${paint(sanitizeCliLine(change.name), "fg")}  ${ownership}`,
+          `${bar()}     ${paint("-", "danger")}  ${paint(sanitizeCliLine(change.name), "fg")}  ${ownership}`,
         );
       else
         lines.push(
-          `     ${paint("~", "warn")}  ${paint(sanitizeCliLine(change.name), "fg")}${
+          `${bar()}     ${paint("~", "warn")}  ${paint(sanitizeCliLine(change.name), "fg")}${
             change.valueChanged ? `  ${paint("value changed", "faint")}` : ""
           }`,
         );
     }
   }
-  lines.push("");
+  lines.push(end, "");
   return lines.join("\n");
 };
 
 export const renderSyncedHistory = (
   synced: Awaited<ReturnType<typeof syncWorkflow>>,
+  environmentLabel?: string,
 ): string =>
   renderRevisionHistory(
-    synced.page.environmentId,
+    environmentLabel ?? synced.page.environmentId,
     revisionHistoryRows(
       synced.page,
       synced.workflow.session.revisionSnapshots(),

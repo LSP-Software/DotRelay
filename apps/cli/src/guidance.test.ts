@@ -36,10 +36,10 @@ describe("guidance", () => {
     }
   });
 
-  test("a machine with no server is offered setup against the hosted origin", () => {
+  test("a machine with no server is offered setup", () => {
     const guidance = guidanceFor("profile_not_selected", { command: "pull" });
     expect(guidance?.offer?.fix).toEqual({ kind: "setup" });
-    expect(guidance?.next).toBe("dotrelay setup https://api.dotrelay.dev");
+    expect(guidance?.next).toBe("dotrelay setup");
   });
 
   test("--no-input names a recovery path that needs no prompt", () => {

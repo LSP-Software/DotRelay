@@ -262,7 +262,9 @@ describe("CLI argument contract", () => {
     );
     expect(() =>
       parseArguments(["setup", "https://a.example", "https://b.example"]),
-    ).toThrow("Usage: dotrelay setup <origin>");
+    ).toThrow("Usage: dotrelay setup [<origin>]");
+    // The address is optional: only a self-hoster names one.
+    expect(parseArguments(["setup"]).positionals).toEqual([]);
     expect(() =>
       parseArguments([
         "rollback",

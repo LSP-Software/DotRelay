@@ -1078,6 +1078,9 @@ const projectEpochTrustFailure = (error: unknown): CliError => {
 export const syncWorkflow = async (
   options: WorkflowOptions,
   parsed: ParsedArguments,
+  // A re-sync right before publishing repeats work the user already saw
+  // finish, so it runs without its own progress line.
+  sync: Readonly<{ readonly quiet?: boolean }> = {},
 ): Promise<
   Readonly<{
     workflow: WorkflowSession;
@@ -1099,6 +1102,7 @@ export const syncWorkflow = async (
   // terminal while it runs.
   const output = options.terminal?.output ?? process.stderr;
   const showsProgress =
+    sync.quiet !== true &&
     !parsed.json &&
     !options.noInput &&
     ["pull", "push", "init", "diff"].includes(parsed.command);

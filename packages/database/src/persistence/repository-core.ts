@@ -198,7 +198,7 @@ export class GenesisExistsError extends Error {
   }
 }
 
-export const DEFAULT_ENVIRONMENT_LABEL = "default";
+export const DEFAULT_ENVIRONMENT_LABEL = "development";
 
 const environmentLabelPattern = /^[A-Za-z][A-Za-z0-9._-]{0,62}$/;
 

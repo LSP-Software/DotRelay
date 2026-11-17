@@ -279,8 +279,14 @@ describe("command help contract", () => {
     expect(new Set(starts).size).toBe(1);
   });
 
-  test("help names the hosted origin for setup", () => {
-    expect(renderHelp()).toContain("dotrelay setup https://api.dotrelay.dev");
-    expect(renderCommandHelp("setup")).toContain("https://api.dotrelay.dev");
+  test("setup needs no address unless you self-host", () => {
+    expect(renderHelp()).toContain("setup [<origin>]");
+    expect(renderHelp()).toContain(
+      "Run dotrelay setup to connect to api.dotrelay.dev",
+    );
+    expect(renderCommandHelp("setup")).toContain(
+      "Defaults to https://api.dotrelay.dev",
+    );
+    expect(renderCommandHelp("setup")).toContain("> dotrelay setup\n");
   });
 });

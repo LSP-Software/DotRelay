@@ -41,6 +41,11 @@ describe("masked Values stay out of the DOM", () => {
     expect(row(false)).not.toContain(SECRET);
   });
 
+  test("a masked row shows a fixed-length mask, not one dot per character", () => {
+    expect(row(false)).toContain("••••••••••••");
+    expect(row(true)).not.toContain("••••••••••••");
+  });
+
   test("a revealed row renders no value attribute either", () => {
     // The live input receives the Value as a property after mount.
     expect(row(true)).not.toContain(SECRET);

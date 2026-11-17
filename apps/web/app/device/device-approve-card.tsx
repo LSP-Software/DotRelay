@@ -25,9 +25,17 @@ import {
 
 type DeviceApproveCardProps = Readonly<{
   readonly userCode: string;
+  /**
+   * Go straight to GitHub when signed out, so the next page you see is the
+   * Allow step. Off after a failed sign-in, so an error can't loop.
+   */
+  readonly autoSignIn?: boolean;
 }>;
 
-export const DeviceApproveCard = ({ userCode }: DeviceApproveCardProps) => {
+export const DeviceApproveCard = ({
+  userCode,
+  autoSignIn = false,
+}: DeviceApproveCardProps) => {
   const apiOrigin = resolveLiveApiOrigin() ?? "http://localhost:3001";
   const callbackUrl = `${resolveWebOrigin()}/device?user_code=${encodeURIComponent(userCode)}`;
   const [view, setView] = useState<"checking" | DeviceApprovalView>("checking");
@@ -91,177 +99,221 @@ export const DeviceApproveCard = ({ userCode }: DeviceApproveCardProps) => {
     }
   };
 
-  if (view === "checking")
-    return (
-      <p className="text-sm text-muted-foreground" role="status">
-        Checking this code…
-      </p>
-    );
-
-  switch (view.kind) {
-    case "sign-in":
+  const renderView = () => {
+    if (view === "checking")
       return (
-        <div className="space-y-3">
-          <p className="text-sm text-muted-foreground">
-            Sign in to allow this CLI.
-          </p>
-          <GitHubSignInButton
-            apiOrigin={apiOrigin}
-            callbackUrl={callbackUrl}
-            errorCallbackURL={callbackUrl}
-          />
-        </div>
+        <p className="text-sm text-muted-foreground" role="status">
+          Checking this code…
+        </p>
       );
-    case "allow":
-      return (
-        <div className="space-y-4">
-          <Alert data-testid="device-approval-warning" variant="destructive">
-            <ShieldOff aria-hidden="true" />
-            <AlertTitle>Only allow a code you requested</AlertTitle>
+
+    switch (view.kind) {
+      case "sign-in":
+        return (
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground" role="status">
+              {autoSignIn
+                ? "Taking you to GitHub to sign in. You'll come back here to allow this CLI."
+                : "Sign in to allow this CLI."}
+            </p>
+            <GitHubSignInButton
+              apiOrigin={apiOrigin}
+              autoStart={autoSignIn}
+              callbackUrl={callbackUrl}
+              errorCallbackURL={callbackUrl}
+            />
+          </div>
+        );
+      case "allow":
+        return (
+          <div className="space-y-4">
+            <Alert data-testid="device-approval-warning" variant="destructive">
+              <ShieldOff aria-hidden="true" />
+              <AlertTitle>Only allow a code you requested</AlertTitle>
+              <AlertDescription>
+                <p>
+                  Allowing gives the terminal that requested this code full
+                  access to your DotRelay account. Deny it if someone sent you
+                  this link or code, asked you to approve it, or if you did not
+                  run <CommandText text="`dotrelay login`" /> or{" "}
+                  <CommandText text="`dotrelay setup`" /> yourself in the last
+                  10 minutes. Codes expire 10 minutes after they are requested.
+                </p>
+              </AlertDescription>
+            </Alert>
+            <label className="flex items-start gap-3 text-sm">
+              <input
+                checked={confirmed}
+                className="mt-0.5"
+                data-testid="device-approval-confirm"
+                disabled={busy}
+                onChange={(event) => setConfirmed(event.target.checked)}
+                type="checkbox"
+              />
+              <span>
+                I started this sign-in from my own terminal just now, and it
+                shows this code.
+              </span>
+            </label>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Button
+                data-testid="device-approval-deny"
+                disabled={busy}
+                onClick={() => void decide("deny")}
+                size="lg"
+                type="button"
+                variant="outline"
+              >
+                Deny
+              </Button>
+              <Button
+                data-testid="device-approval-allow"
+                disabled={busy || !confirmed}
+                onClick={() => void decide("approve")}
+                size="lg"
+                type="button"
+              >
+                Allow this CLI
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              If you didn&apos;t start this, choose Deny.
+            </p>
+          </div>
+        );
+      case "approved":
+        return (
+          <p
+            className="text-sm text-primary"
+            data-testid="device-approval-approved"
+            role="status"
+          >
+            Allowed. You can return to the CLI.
+          </p>
+        );
+      case "declined":
+        return (
+          <p
+            className="text-sm text-muted-foreground"
+            data-testid="device-approval-declined"
+            role="status"
+          >
+            This CLI request was denied. It has no access to your account.
+          </p>
+        );
+      case "expired":
+        return (
+          <Alert
+            className="border-amber-300/30 bg-amber-300/5"
+            data-testid="device-approval-expired"
+          >
+            <Hourglass aria-hidden="true" className="text-amber-300" />
+            <AlertTitle>This code has expired</AlertTitle>
             <AlertDescription>
-              <p>
-                Allowing gives the terminal that requested this code full access
-                to your DotRelay account. Deny it if someone sent you this link
-                or code, asked you to approve it, or if you did not run{" "}
-                <CommandText text="`dotrelay login`" /> or{" "}
-                <CommandText text="`dotrelay setup`" /> yourself in the last 10
-                minutes. Codes expire 10 minutes after they are requested.
-              </p>
+              <CommandText text="Return to the CLI and run `dotrelay login` or `dotrelay setup` to get a new code." />
             </AlertDescription>
           </Alert>
-          <label className="flex items-start gap-3 text-sm">
-            <input
-              checked={confirmed}
-              className="mt-0.5"
-              data-testid="device-approval-confirm"
-              disabled={busy}
-              onChange={(event) => setConfirmed(event.target.checked)}
-              type="checkbox"
+        );
+      case "invalid":
+        return (
+          <Alert
+            className="border-amber-300/30 bg-amber-300/5"
+            data-testid="device-approval-invalid"
+          >
+            <Ban aria-hidden="true" className="text-amber-300" />
+            <AlertTitle>This code isn&apos;t valid</AlertTitle>
+            <AlertDescription>
+              <CommandText text="Return to the CLI and run `dotrelay login` or `dotrelay setup` to get a new code." />
+            </AlertDescription>
+          </Alert>
+        );
+      case "forbidden":
+        return (
+          <Alert
+            className="border-amber-300/30 bg-amber-300/5"
+            data-testid="device-approval-forbidden"
+          >
+            <ShieldOff aria-hidden="true" className="text-amber-300" />
+            <AlertTitle>
+              This code can&apos;t be allowed from this sign-in
+            </AlertTitle>
+            <AlertDescription>
+              It was claimed by a different account. Return to the CLI and check
+              the code it shows.
+            </AlertDescription>
+          </Alert>
+        );
+      case "alpha-admission":
+        return (
+          <div className="space-y-3" data-testid="device-approval-alpha">
+            <p className="font-heading text-lg font-semibold">Private alpha</p>
+            <PrivateAlphaNotice
+              apiOrigin={apiOrigin}
+              hosted={resolveWorkspaceProfileId() === "hosted"}
             />
-            <span>
-              I started this sign-in from my own terminal just now, and it shows
-              this code.
-            </span>
-          </label>
-          <div className="grid gap-2 sm:grid-cols-2">
+          </div>
+        );
+      case "connection":
+        return (
+          <div className="space-y-3" data-testid="device-approval-connection">
+            <Alert className="border-destructive/40">
+              <WifiOff aria-hidden="true" />
+              <AlertTitle>Couldn&apos;t check this code</AlertTitle>
+              <AlertDescription>
+                We couldn&apos;t reach the server, so we don&apos;t know this
+                code&apos;s state. The code above is kept. Try again once
+                you&apos;re connected.
+              </AlertDescription>
+            </Alert>
             <Button
-              data-testid="device-approval-deny"
+              data-testid="device-approval-retry"
               disabled={busy}
-              onClick={() => void decide("deny")}
-              size="lg"
-              type="button"
-              variant="outline"
-            >
-              Deny
-            </Button>
-            <Button
-              data-testid="device-approval-allow"
-              disabled={busy || !confirmed}
-              onClick={() => void decide("approve")}
-              size="lg"
+              onClick={() => void checkState()}
               type="button"
             >
-              Allow this CLI
+              Try again
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground">
-            If you didn&apos;t start this, choose Deny.
-          </p>
-        </div>
-      );
-    case "approved":
-      return (
-        <p
-          className="text-sm text-primary"
-          data-testid="device-approval-approved"
-          role="status"
-        >
-          Allowed. You can return to the CLI.
-        </p>
-      );
-    case "declined":
-      return (
-        <p
-          className="text-sm text-muted-foreground"
-          data-testid="device-approval-declined"
-          role="status"
-        >
-          This CLI request was denied. It has no access to your account.
-        </p>
-      );
-    case "expired":
-      return (
-        <Alert
-          className="border-amber-300/30 bg-amber-300/5"
-          data-testid="device-approval-expired"
-        >
-          <Hourglass aria-hidden="true" className="text-amber-300" />
-          <AlertTitle>This code has expired</AlertTitle>
-          <AlertDescription>
-            <CommandText text="Return to the CLI and run `dotrelay login` or `dotrelay setup` to get a new code." />
-          </AlertDescription>
-        </Alert>
-      );
-    case "invalid":
-      return (
-        <Alert
-          className="border-amber-300/30 bg-amber-300/5"
-          data-testid="device-approval-invalid"
-        >
-          <Ban aria-hidden="true" className="text-amber-300" />
-          <AlertTitle>This code isn&apos;t valid</AlertTitle>
-          <AlertDescription>
-            <CommandText text="Return to the CLI and run `dotrelay login` or `dotrelay setup` to get a new code." />
-          </AlertDescription>
-        </Alert>
-      );
-    case "forbidden":
-      return (
-        <Alert
-          className="border-amber-300/30 bg-amber-300/5"
-          data-testid="device-approval-forbidden"
-        >
-          <ShieldOff aria-hidden="true" className="text-amber-300" />
-          <AlertTitle>
-            This code can&apos;t be allowed from this sign-in
-          </AlertTitle>
-          <AlertDescription>
-            It was claimed by a different account. Return to the CLI and check
-            the code it shows.
-          </AlertDescription>
-        </Alert>
-      );
-    case "alpha-admission":
-      return (
-        <div className="space-y-3" data-testid="device-approval-alpha">
-          <p className="font-heading text-lg font-semibold">Private alpha</p>
-          <PrivateAlphaNotice
-            apiOrigin={apiOrigin}
-            hosted={resolveWorkspaceProfileId() === "hosted"}
-          />
-        </div>
-      );
-    case "connection":
-      return (
-        <div className="space-y-3" data-testid="device-approval-connection">
-          <Alert className="border-destructive/40">
-            <WifiOff aria-hidden="true" />
-            <AlertTitle>Couldn&apos;t check this code</AlertTitle>
-            <AlertDescription>
-              We couldn&apos;t reach the server, so we don&apos;t know this
-              code&apos;s state. The code above is kept. Try again once
-              you&apos;re connected.
-            </AlertDescription>
-          </Alert>
-          <Button
-            data-testid="device-approval-retry"
-            disabled={busy}
-            onClick={() => void checkState()}
-            type="button"
-          >
-            Try again
-          </Button>
-        </div>
-      );
-  }
+        );
+    }
+  };
+
+  // Once a decision is made the question is answered, so the heading says
+  // what happened instead of asking again.
+  const decided =
+    view !== "checking" &&
+    (view.kind === "approved" || view.kind === "declined");
+  const heading =
+    view !== "checking" && view.kind === "approved"
+      ? "CLI allowed"
+      : view !== "checking" && view.kind === "declined"
+        ? "CLI request denied"
+        : "Allow this CLI?";
+  return (
+    <>
+      <div>
+        <h1 className="font-heading text-2xl font-semibold tracking-tight">
+          {heading}
+        </h1>
+        {decided ? null : (
+          <>
+            <p className="mt-2 text-muted-foreground">
+              A DotRelay CLI is asking to sign in as you. Only allow it if you
+              started this sign-in from your own terminal just now and it shows
+              the code below.
+            </p>
+            <p className="mt-3 text-sm text-muted-foreground">
+              Allowing gives that terminal access to your DotRelay account,
+              including your teams, invitations and roles. It still can&apos;t
+              decrypt your values until you set it up as one of your devices.
+            </p>
+          </>
+        )}
+      </div>
+      <p className="rounded-lg border bg-card px-3 py-3 text-center font-mono text-xl tracking-[0.3em]">
+        {userCode}
+      </p>
+      {renderView()}
+    </>
+  );
 };

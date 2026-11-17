@@ -10,8 +10,7 @@ import {
 } from "./args";
 import { banner, bold, paint, section } from "./components";
 import { CliInvocationError } from "./errors";
-import { HOSTED_ORIGIN } from "./hosted-origin";
-import { defaultOrigin } from "./version";
+import { setupOrigin } from "./hosted-origin";
 
 export type CommandHelpEntry = Readonly<{
   readonly about: string;
@@ -28,7 +27,7 @@ export type CommandHelpEntry = Readonly<{
 const ORIGIN_ARGUMENT =
   "<origin>  The server's address. Without a scheme, https is used.";
 const NO_INPUT_WITH_CONTEXT =
-  "never prompt or guess. Pass --profile, and name the environment or have one saved";
+  "never prompt or guess. Name the environment or have one saved";
 const CLASSIFY =
   "set who owns a new variable: shared (Team) or user-defined (Only me). With --no-input, every new variable needs one";
 const TRANSFER_CODE =
@@ -38,7 +37,9 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
   setup: {
     about:
       "Connect to a DotRelay server, sign in with GitHub, and enroll this machine as a device. The server's identity is saved, and later runs check that it hasn't changed.",
-    positional: [ORIGIN_ARGUMENT],
+    positional: [
+      `<origin>  Optional. The server's address, only needed if you self-host. Defaults to ${setupOrigin}. Without a scheme, https is used.`,
+    ],
     options: {
       noInput: "never ask for input",
       noOpen: "don't open the verification page in a browser",
@@ -46,10 +47,9 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
     notes: [
       "If a saved server's identity has changed, setup stops. Find out why it changed before you continue.",
       "For a loopback host such as localhost, setup retries once over plain HTTP if HTTPS can't be reached.",
-      "The hosted service is at https://api.dotrelay.dev. If you self-host, use your own server's API address.",
     ],
     examples: [
-      "dotrelay setup https://api.dotrelay.dev",
+      "dotrelay setup",
       "dotrelay setup relay.example",
       "dotrelay setup https://relay.example --no-input",
     ],
@@ -255,7 +255,7 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
         "show the full value diff in the final review instead of the masked summary",
     },
     notes: [
-      "With --no-input, pass --profile, the target revision, and at least one --variable. The environment must be named or already saved.",
+      "With --no-input, pass the target revision and at least one --variable. The environment must be named or already saved.",
     ],
     examples: [
       "dotrelay history",
@@ -942,9 +942,7 @@ export const renderHelp = (): string => {
   lines.push(
     "",
     paint(
-      defaultOrigin
-        ? `With no server profile selected, this build uses ${defaultOrigin}.`
-        : `New here? Run dotrelay setup ${HOSTED_ORIGIN} for the hosted service, or use your own server's address if you self-host.`,
+      `New here? Run dotrelay setup to connect to ${new URL(setupOrigin).host}. If you self-host, add your server's address.`,
       "faint",
     ),
   );

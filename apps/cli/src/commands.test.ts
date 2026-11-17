@@ -1906,7 +1906,7 @@ describe("guided runs offer the fix and carry on", () => {
       expect(result.exitCode).toBe(2);
       expect(JSON.parse(result.stderr)).toMatchObject({
         code: "profile_not_selected",
-        next: "dotrelay setup https://api.dotrelay.dev",
+        next: "dotrelay setup",
       });
       const human = await run(["pull"], {
         profilePath: join(stateDirectory, "profiles.json"),
@@ -1916,9 +1916,7 @@ describe("guided runs offer the fix and carry on", () => {
       expect(human.stderr).toContain(
         "■  DotRelay isn't set up on this machine yet",
       );
-      expect(human.stderr).toContain(
-        "└  next  dotrelay setup https://api.dotrelay.dev",
-      );
+      expect(human.stderr).toContain("└  next  dotrelay setup");
     } finally {
       await rm(stateDirectory, { recursive: true, force: true });
     }
