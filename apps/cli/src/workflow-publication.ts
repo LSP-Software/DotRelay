@@ -65,7 +65,7 @@ import {
   valueDiffsForPull,
 } from "./value-diff";
 import {
-  adminClient,
+  createDeviceAdmin,
   ask,
   authoredAtFloor,
   bytesToHex,
@@ -250,6 +250,7 @@ export const publicationChangeFor = (
 export const destinationFor = async (
   options: WorkflowOptions,
   context: PublicationContext,
+  deviceId?: string | null,
 ): Promise<PublicationDestination> => {
   // A missing metadata lookup degrades the review to opaque ids; it must
   // never block an operation the operator is about to confirm.
@@ -257,7 +258,10 @@ export const destinationFor = async (
     Awaited<ReturnType<typeof listEnvironments>>[number] | undefined;
   let team: Awaited<ReturnType<typeof listTeams>>[number] | undefined;
   try {
-    const admin = adminClient(options);
+    // Listing environments is Device-scoped, so the lookup proves this
+    // Device; a session-only client is refused and the review falls back
+    // to opaque ids.
+    const admin = createDeviceAdmin(options, deviceId ?? options.deviceId);
     const [environments, teams] = await Promise.all([
       listEnvironments(admin, context.projectId),
       listTeams(admin),
@@ -454,8 +458,16 @@ export const preparePublicationBaseline = async (
   const fallback = recorded?.origin === "fallback";
   const unverifiableNotice =
     "The revision your file was pulled from is no longer in the verified history, so your file is compared with the environment as it is now.";
+  // With nothing on the server yet, there is no newer value the file could
+  // overwrite, so the "no record of pulling" warning would only alarm.
+  const serverHasValues = synced.variables.some(
+    (variable) => !variable.tombstone,
+  );
+  const missingNotice = serverHasValues
+    ? missingBaselineNotice(inputPath)
+    : null;
   const persistFallback = async (
-    notice: string,
+    notice: string | null,
   ): Promise<PreparedPublicationBaseline> => {
     await writePublicationBaseline(options.stateDirectory, {
       environmentId,
@@ -479,9 +491,9 @@ export const preparePublicationBaseline = async (
       }),
     });
   };
-  if (!recorded) return persistFallback(missingBaselineNotice(inputPath));
+  if (!recorded) return persistFallback(missingNotice);
   if (!recordedVerifiable) return persistFallback(unverifiableNotice);
-  const notice = fallback ? missingBaselineNotice(inputPath) : null;
+  const notice = fallback ? missingNotice : null;
   if (recordedEmpty)
     return Object.freeze({
       snapshot: Object.freeze([]),
@@ -607,7 +619,7 @@ export const publish = async (
   }>,
   reconciliation?: PublicationReconciliation,
 ): Promise<Record<string, unknown>> => {
-  const synced = await syncWorkflow(options, parsed);
+  const synced = await syncWorkflow(options, parsed, { quiet: true });
   try {
     const recovered = await synced.workflow.transport.recoverPublication?.();
     if (recovered)
@@ -690,6 +702,13 @@ export const publish = async (
   };
   if (!draftVariables.some((variable) => variable.hasDraftChange)) {
     await settleFallbackBaseline(options, reconciliation);
+    // Name the environment, so "nothing to do" can't hide that the command
+    // looked at a different one than expected.
+    const { environment } = await destinationFor(
+      options,
+      synced.workflow.publicationContext,
+      synced.workflow.deviceId,
+    );
     return {
       revision: synced.page.currentHeadId,
       lanes: 0,
@@ -697,6 +716,7 @@ export const publish = async (
       // JSON `message` status values stay stable for scripts; the human
       // renderer capitalises them.
       message: "up to date, nothing to publish",
+      summary: `Nothing to publish: ${environment} already matches`,
       ...pendingActionsField(synced.workflow.pendingActions),
     };
   }
@@ -731,13 +751,16 @@ export const publish = async (
       { changedCount: removedCount },
       "deletion_requires_approval",
     );
+  let environmentLabel: string | undefined;
   if (!options.noInput) {
     const destination = await destinationFor(
       options,
       synced.workflow.publicationContext,
+      synced.workflow.deviceId,
     );
     const output = options.terminal?.output ?? process.stderr;
     const environment = destination.environment;
+    environmentLabel = environment;
     if (mutation === "ROLLBACK") {
       // The rollback review names the append-only consequence: the operator
       // approves adding a Rollback Revision, not rewriting earlier ones.
@@ -868,6 +891,8 @@ export const publish = async (
     lanes: artifacts.encryptedLaneCount,
     tombstones: artifacts.tombstoneLaneCount,
     message: mutation === "ROLLBACK" ? "Rollback published" : "Published",
+    // What the person sees: how much changed, and where it went.
+    summary: `${mutation === "ROLLBACK" ? "Rolled back" : "Published"} ${changes.length} ${changes.length === 1 ? "change" : "changes"}${environmentLabel ? ` to ${environmentLabel}` : ""}`,
     ...pendingActionsField(synced.workflow.pendingActions),
   };
 };

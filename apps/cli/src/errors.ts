@@ -278,9 +278,14 @@ export const categoryForProblem = (
 
 // GitHub shows DotRelay only the repositories its GitHub App is installed on.
 // The Server Profile publishes the install link when it knows its app.
+// The opening sentence restates the human error card's headline, so the
+// card drops it (see REPOSITORY_ACCESS_LEAD); --json keeps the full text.
+export const REPOSITORY_ACCESS_LEAD =
+  "DotRelay can't access this GitHub repository.";
+
 export const repositoryAccessDeniedDetail = (installUrl?: string): string =>
   [
-    "DotRelay can't access this GitHub repository.",
+    REPOSITORY_ACCESS_LEAD,
     "1. Check the repository name and that your GitHub account can open it.",
     installUrl
       ? `2. Install the DotRelay GitHub App and choose this repository: ${installUrl}`
@@ -394,7 +399,7 @@ export const detailForProblem = (
 
 // A sentence that opens with a command ("dotrelay setup needs ...") keeps
 // the command as typed.
-const capitalize = (text: string): string =>
+export const capitalize = (text: string): string =>
   text.length === 0 || /^dotrelay\s/.test(text)
     ? text
     : `${text.charAt(0).toUpperCase()}${text.slice(1)}`;

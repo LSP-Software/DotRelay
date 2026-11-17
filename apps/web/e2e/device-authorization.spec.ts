@@ -149,7 +149,7 @@ test("a signed-in user can deny a code they did not start", async ({
   await expect(page.getByTestId("device-approval-allow")).toHaveCount(0);
 });
 
-test("a signed-out user with a pending code sees only the sign-in control", async ({
+test("a signed-out user with a pending code goes straight to GitHub", async ({
   page,
 }) => {
   await mockDeviceFlow(page, () => ({
@@ -157,12 +157,45 @@ test("a signed-out user with a pending code sees only the sign-in control", asyn
     session: "signed-out",
     approve: "success",
   }));
+  const callbacks: unknown[] = [];
+  await page.route("**/api/auth/sign-in/social", (route) => {
+    callbacks.push(
+      (route.request().postDataJSON() as { callbackURL?: unknown }).callbackURL,
+    );
+    return route.fulfill(
+      json(200, { url: "https://github.example/login/oauth/authorize" }),
+    );
+  });
+  await page.route("https://github.example/**", (route) =>
+    route.fulfill({ status: 200, contentType: "text/html", body: "GitHub" }),
+  );
   await openDevicePage(page);
+
+  await expect(page).toHaveURL("https://github.example/login/oauth/authorize");
+  expect(callbacks).toHaveLength(1);
+  expect(String(callbacks[0])).toContain(`/device?user_code=${USER_CODE}`);
+});
+
+test("a failed sign-in shows the error and a sign-in control instead of looping", async ({
+  page,
+}) => {
+  await mockDeviceFlow(page, () => ({
+    status: { kind: "pending" },
+    session: "signed-out",
+    approve: "success",
+  }));
+  let signInRequests = 0;
+  await page.route("**/api/auth/sign-in/social", (route) => {
+    signInRequests += 1;
+    return route.fulfill(json(500, {}));
+  });
+  await page.goto(`/device?user_code=${USER_CODE}&error=access_denied`);
 
   await expect(
     page.getByRole("button", { name: "Continue with GitHub" }),
   ).toBeVisible();
   await expect(page.getByTestId("device-approval-allow")).toHaveCount(0);
+  expect(signInRequests).toBe(0);
 });
 
 test("an expired code ends with return-to-CLI instructions, not sign-in", async ({

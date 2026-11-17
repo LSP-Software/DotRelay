@@ -3,10 +3,10 @@
 // runs keep the foundation identifier.
 declare const __DOTRELAY_RELEASE_VERSION__: string;
 
-// A dev build stamps the Server Profile origin it ships targeting, so a
-// binary installed from the dev channel knows the service it belongs to.
-// Release builds and source runs stamp no origin and require an explicit
-// `dotrelay setup <origin>` trust decision.
+// A build stamps the Server Profile origin it ships targeting (the hosted
+// service for a release, the dev API for the dev channel), so an installed
+// binary knows the service it belongs to and is pinned to it on first use.
+// Source runs stamp no origin and need `dotrelay setup` first.
 declare const __DOTRELAY_DEFAULT_ORIGIN__: string;
 
 export const version: string =

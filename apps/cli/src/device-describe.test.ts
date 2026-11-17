@@ -10,7 +10,7 @@ test("uses the machine hostname as the display name", () => {
     displayName: "CatchOS Main PC",
     clientKind: "cli",
     osName: "Linux",
-    clientSummary: "dotrelay-cli",
+    clientSummary: "DotRelay CLI on Linux",
   });
 });
 

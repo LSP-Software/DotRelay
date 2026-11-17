@@ -10,8 +10,7 @@ import {
 } from "./args";
 import { banner, bold, paint, section } from "./components";
 import { CliInvocationError } from "./errors";
-import { HOSTED_ORIGIN } from "./hosted-origin";
-import { defaultOrigin } from "./version";
+import { setupOrigin } from "./hosted-origin";
 
 export type CommandHelpEntry = Readonly<{
   readonly about: string;
@@ -28,7 +27,7 @@ export type CommandHelpEntry = Readonly<{
 const ORIGIN_ARGUMENT =
   "<origin>  The server's address. Without a scheme, https is used.";
 const NO_INPUT_WITH_CONTEXT =
-  "never prompt or guess. Pass --profile, and name the environment or have one saved";
+  "never prompt or guess. Name the environment or have one saved";
 const CLASSIFY =
   "set who owns a new variable: shared (Team) or user-defined (Only me). With --no-input, every new variable needs one";
 const TRANSFER_CODE =
@@ -38,7 +37,9 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
   setup: {
     about:
       "Connect to a DotRelay server, sign in with GitHub, and enroll this machine as a device. The server's identity is saved, and later runs check that it hasn't changed.",
-    positional: [ORIGIN_ARGUMENT],
+    positional: [
+      `<origin>  Optional. The server's address, only needed if you self-host. Defaults to ${setupOrigin}. Without a scheme, https is used.`,
+    ],
     options: {
       noInput: "never ask for input",
       noOpen: "don't open the verification page in a browser",
@@ -46,10 +47,9 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
     notes: [
       "If a saved server's identity has changed, setup stops. Find out why it changed before you continue.",
       "For a loopback host such as localhost, setup retries once over plain HTTP if HTTPS can't be reached.",
-      "The hosted service is at https://api.dotrelay.dev. If you self-host, use your own server's API address.",
     ],
     examples: [
-      "dotrelay setup https://api.dotrelay.dev",
+      "dotrelay setup",
       "dotrelay setup relay.example",
       "dotrelay setup https://relay.example --no-input",
     ],
@@ -264,7 +264,7 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
         "show the full value diff in the final review instead of the masked summary",
     },
     notes: [
-      "With --no-input, pass --profile, the target revision, and at least one --variable. The environment must be named or already saved.",
+      "With --no-input, pass the target revision and at least one --variable. The environment must be named or already saved.",
     ],
     examples: [
       "dotrelay history",
@@ -321,8 +321,8 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       "Enroll this machine as your first device. If your account already has an enrolled device, this starts an enrollment request instead, and you approve it from that device.",
     options: {
       output: "file to write the signed enrollment request to",
-      profile: "server profile to enroll on (required with --no-input)",
-      noInput: "never prompt. Needs --profile",
+      profile: "server profile to enroll on (default: the selected profile)",
+      noInput: "never prompt",
     },
     examples: ["dotrelay device enroll"],
   },
@@ -331,8 +331,8 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       "Start enrolling this machine and write a signed request file for one of your other devices to approve. The file holds only public data.",
     options: {
       output: "request file to write",
-      profile: "server profile to enroll on (required with --no-input)",
-      noInput: "never prompt. Needs --profile",
+      profile: "server profile to enroll on (default: the selected profile)",
+      noInput: "never prompt",
     },
     examples: ["dotrelay device begin --output enrollment-request.json"],
   },
@@ -341,8 +341,8 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       "Approve an enrollment request from a second device that's already authorized, using the signed request file.",
     options: {
       from: "signed request file to approve (required)",
-      profile: "server profile to enroll on (required with --no-input)",
-      noInput: "never prompt. Needs --profile",
+      profile: "server profile to enroll on (default: the selected profile)",
+      noInput: "never prompt",
     },
     examples: ["dotrelay device approve --from enrollment-request.json"],
   },
@@ -351,8 +351,8 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       "Finish an approved enrollment on the device that started it, once the approved request file comes back.",
     options: {
       from: "approved request file to finish with (required)",
-      profile: "server profile to enroll on (required with --no-input)",
-      noInput: "never prompt. Needs --profile",
+      profile: "server profile to enroll on (default: the selected profile)",
+      noInput: "never prompt",
     },
     examples: ["dotrelay device complete --from enrollment-request.json"],
   },
@@ -364,8 +364,8 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       "A new recovery code replaces the old one, which stops working. Store the new one somewhere safe.",
     ],
     options: {
-      profile: "server profile to back up (required with --no-input)",
-      noInput: "never prompt. Needs --profile",
+      profile: "server profile to back up (default: the selected profile)",
+      noInput: "never prompt",
     },
     examples: ["dotrelay device backup"],
   },
@@ -381,8 +381,8 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       recoveryCodeFile:
         "path to a file with mode 0600 that holds the recovery code (13 groups of 4 characters). Meant for scripts",
       transfer: TRANSFER_CODE,
-      profile: "server profile to recover on (required with --no-input)",
-      noInput: "never prompt. Needs --profile",
+      profile: "server profile to recover on (default: the selected profile)",
+      noInput: "never prompt",
     },
     examples: [
       "dotrelay device recover",
@@ -398,8 +398,8 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       "If this server has no session yet, run dotrelay login first.",
     ],
     options: {
-      profile: "server profile to set up (required with --no-input)",
-      noInput: "never prompt. Needs --profile",
+      profile: "server profile to set up (default: the selected profile)",
+      noInput: "never prompt",
     },
     examples: ["dotrelay device setup"],
   },
@@ -415,8 +415,9 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
     ],
     options: {
       to: "id of the receiving device (required with --no-input)",
-      profile: "server profile to transfer from (required with --no-input)",
-      noInput: "never prompt. Needs --profile",
+      profile:
+        "server profile to transfer from (default: the selected profile)",
+      noInput: "never prompt",
     },
     examples: [
       "dotrelay device transfer",
@@ -433,8 +434,8 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
     options: {
       wrapperId:
         "full id of the wrapper to revoke. Leave it out to pick from a list. Required with --no-input",
-      profile: "server profile to revoke on (required with --no-input)",
-      noInput: "never prompt. Needs --profile",
+      profile: "server profile to revoke on (default: the selected profile)",
+      noInput: "never prompt",
     },
     examples: [
       "dotrelay device revoke-wrapper",
@@ -461,7 +462,7 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
     about:
       "Move the linked project to a new epoch and seal a new project key for your account's devices. Use this when a device has been granted the current epoch but never received its key.",
     options: {
-      profile: "server profile to rotate on (required with --no-input)",
+      profile: "server profile to rotate on (default: the selected profile)",
       noInput: "never prompt. Needs --force",
       force: "confirm the rotation with --no-input",
     },
@@ -952,9 +953,7 @@ export const renderHelp = (): string => {
   lines.push(
     "",
     paint(
-      defaultOrigin
-        ? `With no server profile selected, this build uses ${defaultOrigin}.`
-        : `New here? Run dotrelay setup ${HOSTED_ORIGIN} for the hosted service, or use your own server's address if you self-host.`,
+      `New here? Run dotrelay setup to connect to ${new URL(setupOrigin).host}. If you self-host, add your server's address.`,
       "faint",
     ),
   );

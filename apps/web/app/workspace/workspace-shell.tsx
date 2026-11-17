@@ -114,6 +114,7 @@ import {
 } from "@/lib/browser-storage";
 import {
   type PendingEnrollment,
+  ACCOUNT_EXISTS_MESSAGE,
   provisionBrowserDevice as provisionBrowserDeviceFlow,
   repairStaleEpoch as repairStaleEpochFlow,
 } from "@/lib/device-provisioning";
@@ -251,6 +252,7 @@ type PendingSwitch = Readonly<{
   readonly restore?: number | undefined;
 }>;
 
+const HOSTED_API_ORIGIN = "https://api.dotrelay.dev";
 const environmentDisplayLabel = (
   environment: WorkspaceProject["environments"][number] | null | undefined,
   project: WorkspaceProject | null | undefined,
@@ -980,7 +982,12 @@ export const WorkspaceShell = ({
     displayBoundary.environment.projectId === selectedProject.id
       ? (displayBoundary.environment.rotationOwed ?? null)
       : null;
-  const cliCommand = `dotrelay setup ${displayBoundary.profile.origin}`;
+  // The CLI connects to the hosted service by default, so only another
+  // server's address needs typing.
+  const cliCommand =
+    displayBoundary.profile.origin === HOSTED_API_ORIGIN
+      ? "dotrelay setup"
+      : `dotrelay setup ${displayBoundary.profile.origin}`;
   const currentIdentity = environmentContextIdentity({
     profileId,
     serverProfileId: boundary.profile.serverProfileId,
@@ -1017,6 +1024,9 @@ export const WorkspaceShell = ({
       durableBrowserDeviceRef.current.has(currentPinKey));
   const enrolledDevices = enrolledDeviceRows(displayBoundary, {
     thisBrowserEnrolled,
+    keysNotPerDevice:
+      !displayBoundary.environment.projectId ||
+      Boolean(displayBoundary.accountKeyEnvelope),
   });
 
   // The membership and invitation surfaces are reached straight from the
@@ -2775,6 +2785,7 @@ export const WorkspaceShell = ({
       deviceSetupInProgress={
         deviceSetupInProgress || (autoEnrollmentEligible && !deviceSetupMessage)
       }
+      accountExistsElsewhere={deviceSetupMessage === ACCOUNT_EXISTS_MESSAGE}
       setupMode={accountSetupRequired}
       onAddPassword={setAddPassword}
       onAddPasswordOpen={setAddPasswordOpen}
@@ -3649,9 +3660,16 @@ export const WorkspaceShell = ({
                     <h1 className="font-heading text-2xl font-semibold tracking-tight">
                       {projectDisplayName(selectedProject)}
                     </h1>
-                    <p className="mt-0.5 text-sm text-muted-foreground">
-                      {selectedTeam?.name}
-                    </p>
+                    {/* The team is worth naming only when the repository's
+                        owner doesn't already say it. */}
+                    {selectedTeam &&
+                    !projectDisplayName(selectedProject).startsWith(
+                      `${selectedTeam.name} /`,
+                    ) ? (
+                      <p className="mt-0.5 text-sm text-muted-foreground">
+                        Team {selectedTeam.name}
+                      </p>
+                    ) : null}
                   </div>
                   <div className="mb-5 flex flex-wrap items-end gap-x-3 gap-y-2 border-b">
                     <Tabs

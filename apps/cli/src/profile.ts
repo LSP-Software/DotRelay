@@ -196,7 +196,7 @@ const damagedCatalog = (path: string, code: string): CliError =>
     "local-io",
     [
       `the server profile catalog at ${path} is damaged and can't be read.`,
-      "Fix it with dotrelay profile rebind <name> <origin>, or move the file aside and run dotrelay setup again with your server's address (https://api.dotrelay.dev for the hosted service).",
+      "Fix it with dotrelay profile rebind <name> <origin>, or move the file aside and run dotrelay setup again (add your server's address if you self-host).",
       "The file only holds server names, addresses and ids. Device keys and sessions are stored separately and stay as they are.",
     ].join("\n"),
     {},

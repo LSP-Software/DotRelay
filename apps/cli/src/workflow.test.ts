@@ -927,6 +927,39 @@ describe("protected CLI workflows", () => {
       );
   });
 
+  test("init --no-input uses the selected server profile without --profile", async () => {
+    const runtime = await setup();
+    await Bun.write(
+      runtime.profilePath,
+      JSON.stringify({ version: 1, profiles: [profile], selected: "relay" }),
+    );
+    const contextPath = `${runtime.stateDirectory}/context.json`;
+    await Bun.write(
+      contextPath,
+      JSON.stringify({
+        serverProfileId: profile.pin.serverProfileId,
+        projectId: ids.project,
+      }),
+    );
+    const input = `${runtime.stateDirectory}/selected-profile.env`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\n");
+    const result = await run(
+      [
+        "init",
+        "development",
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, worktreeConfig: contextPath },
+    );
+    expect(result.stderr).toBe("");
+    expect(result.exitCode).toBe(0);
+  });
+
   test("refuses Values a peer Device signed when only plain signing trust keys name it", async () => {
     const bootstrap = await createDeviceBootstrap({
       pin: profile.pin,
@@ -2471,9 +2504,7 @@ describe("protected CLI workflows", () => {
       },
     );
     expect(declined.exitCode).toBe(2);
-    expect(declined.stderr).toContain(
-      "You didn't confirm, so nothing was published",
-    );
+    expect(declined.stderr).toContain("└  Nothing was published");
     expect(declined.stderr).not.toContain("abc123x");
     expect(declined.stderr).not.toContain("postgres://secret");
     expect(declined.stdout).not.toContain("abc123x");
@@ -2683,9 +2714,7 @@ describe("protected CLI workflows", () => {
       },
     );
     expect(declined.exitCode).toBe(2);
-    expect(declined.stderr).toContain(
-      "You didn't confirm, so no values were printed",
-    );
+    expect(declined.stderr).toContain("└  No values were printed");
     expect(declined.stderr).not.toContain("postgres://secret");
     expect(declined.stderr).not.toContain("tok");
     expect(declined.stdout).not.toContain("postgres://secret");
@@ -3747,9 +3776,7 @@ describe("protected CLI workflows", () => {
       },
     );
     expect(revealedDeclined.exitCode).toBe(2);
-    expect(revealedDeclined.stderr).toContain(
-      "You didn't confirm, so nothing was rolled back",
-    );
+    expect(revealedDeclined.stderr).toContain("└  Nothing was rolled back");
     expect(revealedDeclined.stderr).not.toContain("abc123x");
     expect(revealedDeclined.stderr).not.toContain("postgres://secret");
     expect(questions).toEqual(["Roll back the selected variables? [y/N]"]);
@@ -3906,7 +3933,7 @@ describe("protected CLI workflows", () => {
       runtime,
     );
     expect(history.exitCode).toBe(0);
-    expect(history.stdout).toContain(`Environment ${ids.environment}`);
+    expect(history.stdout).toContain("Environment development");
     expect(history.stdout).toContain("#1");
     expect(history.stdout).toContain("#2");
     expect(history.stdout).toContain("Created");
@@ -3916,6 +3943,8 @@ describe("protected CLI workflows", () => {
     expect(history.stdout).toContain("Team");
     expect(history.stdout).toContain("value changed");
     expect(history.stdout).toContain("current");
+    // Each Revision names who published it.
+    expect(history.stdout).toContain("by you");
     expect(history.stdout).toMatch(/\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/);
     // History output never carries Values, even the ones this Device can read.
     expect(history.stdout).not.toContain("postgres://secret");
@@ -6073,7 +6102,7 @@ describe("peer grant provisioning during ordinary reads", () => {
     // The original read result stands: the human history still renders the
     // (empty) verified Revisions, and the pending action is surfaced
     // truthfully on the terminal instead of aborting or hiding it.
-    expect(history.stdout).toContain(`Environment ${ids.environment}`);
+    expect(history.stdout).toContain("Environment development");
     expect(history.stdout).toContain(
       "Nothing has been published to this environment yet",
     );
@@ -7986,6 +8015,48 @@ describe("publication baseline reconciliation", () => {
       "This machine has no record of pulling",
     );
     expect(rendered.join("")).toContain("dotrelay pull first");
+  });
+
+  test("a first push to an empty environment has no stale-file notice", async () => {
+    const runtime = await setup();
+    const contextPath = `${runtime.stateDirectory}/context.json`;
+    await Bun.write(
+      contextPath,
+      JSON.stringify({
+        serverProfileId: profile.pin.serverProfileId,
+        projectId: ids.project,
+      }),
+    );
+    const input = `${runtime.stateDirectory}/first.env`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\n");
+    const terminalOutput = new PassThrough();
+    const rendered: string[] = [];
+    terminalOutput.on("data", (chunk) => {
+      rendered.push(chunk.toString("utf8"));
+    });
+    const result = await run(
+      [
+        "init",
+        "development",
+        "--profile",
+        "relay",
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--no-input",
+      ],
+      {
+        ...runtime,
+        worktreeConfig: contextPath,
+        terminal: { input: new PassThrough(), output: terminalOutput },
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    // Nothing on the server could be newer than the file.
+    expect(rendered.join("")).not.toContain("no record of pulling");
+    // The closing line says how much was published.
+    expect(result.stdout).toContain("Published 1 change");
   });
 
   test("push warns when the dotenv file is tracked by Git", async () => {

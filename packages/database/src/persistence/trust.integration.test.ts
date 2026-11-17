@@ -609,7 +609,7 @@ integrationDescribe("trust workflow integration", () => {
       operation: { ...input.operation, id: crypto.randomUUID() },
     };
     await expect(devices.completeBootstrap(database, tampered)).rejects.toThrow(
-      "recovery authorization",
+      "invalid_crypto_object",
     );
     expect(await database.device.count({ where: { userId: user.id } })).toBe(1);
     await devices.completeBootstrap(database, input);
@@ -626,7 +626,7 @@ integrationDescribe("trust workflow integration", () => {
     });
     await expect(
       devices.completeBootstrap(database, inputFor(await prepare())),
-    ).rejects.toThrow("recovery authorization");
+    ).rejects.toThrow("invalid_crypto_object");
     expect(await database.device.count({ where: { userId: user.id } })).toBe(2);
   });
 
@@ -680,9 +680,7 @@ integrationDescribe("trust workflow integration", () => {
         },
         certificateObject: await createProtocolObjectInput(2),
       }),
-    ).rejects.toThrow(
-      "a device has already been bootstrapped; use enrollment to add another device",
-    );
+    ).rejects.toThrow("state_conflict");
     expect(
       await database.device.count({
         where: { userId: user.id, lifecycle: "ACTIVE" },

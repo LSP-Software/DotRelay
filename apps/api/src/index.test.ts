@@ -1053,7 +1053,7 @@ describe("API foundation", () => {
           {
             id: "00000000-0000-4000-8000-000000000003",
             projectId: "00000000-0000-4000-8000-000000000002",
-            label: "default",
+            label: "development",
             lifecycle: "ACTIVE",
             currentHeadId: "00000000-0000-4000-8000-0000000000aa",
             currentHead: {
@@ -1091,7 +1091,7 @@ describe("API foundation", () => {
         {
           id: "00000000-0000-4000-8000-000000000003",
           projectId: "00000000-0000-4000-8000-000000000002",
-          label: "default",
+          label: "development",
           lifecycle: "active",
           currentHeadId: "00000000-0000-4000-8000-0000000000aa",
           currentHeadHash: "ab".repeat(48),
@@ -1276,7 +1276,7 @@ describe("Project and Environment lifecycle administration", () => {
     const environment = {
       id: ENVIRONMENT,
       projectId: PROJECT,
-      label: "default",
+      label: "development",
       currentHeadId: HEAD,
       lifecycle,
       project: { id: PROJECT, teamId: TEAM, lifecycle: "ACTIVE" },
@@ -1429,7 +1429,7 @@ describe("Project and Environment lifecycle administration", () => {
     expect(await archived.json()).toEqual({
       id: ENVIRONMENT,
       projectId: PROJECT,
-      label: "default",
+      label: "development",
       lifecycle: "archived",
       currentHeadId: HEAD,
       currentHeadHash: null,
@@ -1440,7 +1440,7 @@ describe("Project and Environment lifecycle administration", () => {
     expect(await restored.json()).toEqual({
       id: ENVIRONMENT,
       projectId: PROJECT,
-      label: "default",
+      label: "development",
       lifecycle: "active",
       currentHeadId: HEAD,
       currentHeadHash: null,
@@ -2240,7 +2240,7 @@ describe("workspace boundary Device binding", () => {
       environment: {
         findFirst: async () => ({
           id: environmentId,
-          label: "default",
+          label: "development",
           currentHeadId: null,
           currentHead: null,
         }),

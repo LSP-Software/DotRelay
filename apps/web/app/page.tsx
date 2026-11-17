@@ -18,7 +18,6 @@ import { resolveLiveApiOrigin } from "@/lib/workspace-boundary";
 const REPOSITORY_URL = "https://github.com/LSP-Software/DotRelay";
 const DOCS_URL = `${REPOSITORY_URL}/blob/main/docs/wiki/cli.md`;
 const SECURITY_URL = `${REPOSITORY_URL}/blob/main/SECURITY.md`;
-const HOSTED_API = "https://api.dotrelay.dev";
 
 const Section = ({
   id,
@@ -50,8 +49,8 @@ const Section = ({
 const STEPS = [
   {
     title: "Connect the CLI",
-    body: "Points the CLI at DotRelay and asks you to confirm the server the first time.",
-    command: `dotrelay setup ${HOSTED_API}`,
+    body: "Signs you in with GitHub and sets up this computer. Self-hosting? Add your server's address.",
+    command: "dotrelay setup",
     testId: "setup-command",
   },
   {
@@ -218,10 +217,12 @@ const HomePage = async () => {
                   How it works
                 </a>
               </div>
-              <p className="mt-3.5 text-sm text-muted-foreground">
-                DotRelay is in private alpha. You can sign in once your GitHub
-                account has been let in.
-              </p>
+              {signedIn ? null : (
+                <p className="mt-3.5 text-sm text-muted-foreground">
+                  DotRelay is in private alpha. You can sign in once your GitHub
+                  account has been let in.
+                </p>
+              )}
               <InstallTabs className="mt-8" />
             </div>
 

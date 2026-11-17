@@ -384,9 +384,7 @@ describe("CLI Server Profile catalog", () => {
           throw new Error("setup must not be skipped without a default origin");
         },
       }),
-    ).rejects.toThrow(
-      "you haven't picked a server yet. Run dotrelay setup https://api.dotrelay.dev (or your own origin if you self-host).",
-    );
+    ).rejects.toThrow("you haven't picked a server yet. Run dotrelay setup.");
   });
 
   test("does not persist a newly trusted profile when confirmation is declined", async () => {

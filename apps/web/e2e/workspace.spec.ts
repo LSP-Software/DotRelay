@@ -253,7 +253,7 @@ test("landing page offers install steps, docs, and policies", async ({
     "npm install -g @dotrelay/cli",
   );
   await expect(page.getByTestId("setup-command")).toContainText(
-    "dotrelay setup https://api.dotrelay.dev",
+    "dotrelay setup",
   );
   await expect(
     page

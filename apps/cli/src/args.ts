@@ -1,5 +1,4 @@
 import { CliInvocationError } from "./errors";
-import { HOSTED_ORIGIN } from "./hosted-origin";
 
 export { CliInvocationError } from "./errors";
 
@@ -274,7 +273,7 @@ export const FLAG_TOKENS: Record<FlagKey, string> = {
 };
 
 export const USAGE: Record<string, string> = {
-  setup: "dotrelay setup <origin>",
+  setup: "dotrelay setup [<origin>]",
   login: "dotrelay login",
   logout: "dotrelay logout",
   init: "dotrelay init [<environment-id-or-label>]",
@@ -679,7 +678,7 @@ const validateCommand = (parsed: MutableArguments) => {
           ? 0
           : 1,
     init: [0, 1],
-    setup: 1,
+    setup: [0, 1],
     login: 0,
     logout: 0,
     push: 0,
@@ -711,9 +710,7 @@ const validateCommand = (parsed: MutableArguments) => {
         allowedFlags.includes("environment");
       const correction = suggestEnvironment
         ? ` To choose an environment, use --environment ${parsed.positionals[0]}.`
-        : label === "setup" && parsed.positionals.length === 0
-          ? ` Use ${HOSTED_ORIGIN}, or your own server's address if you self-host.`
-          : "";
+        : "";
       throw new CliInvocationError(
         withUsage(
           `${describeArgumentMismatch(label, expected, parsed.positionals)}${correction}`,

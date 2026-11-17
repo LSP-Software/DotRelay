@@ -18,6 +18,7 @@ import {
   CliInvocationError,
   categoryForProblem,
   detailForProblem,
+  sanitizeCliLine,
 } from "./errors";
 import {
   defaultNetworkPolicy,
@@ -229,7 +230,7 @@ const parseEnvironment = (value: unknown): EnvironmentSummary => {
     label:
       typeof value.label === "string" && value.label.trim().length > 0
         ? value.label.trim()
-        : "default",
+        : "development",
     lifecycle: requireLifecycle(value.lifecycle, "environment lifecycle"),
     currentHeadId:
       value.currentHeadId === null
@@ -468,7 +469,9 @@ export const resolveTeamForProject = async (
       throw new CliInvocationError(
         "you don't have a team yet. Run this command without --no-input to create one, or pass --team <team-id>.",
       );
-    return createTeam(client, await askForTeamName(options));
+    const team = await createTeam(client, await askForTeamName(options));
+    options.write?.(`Created the team ${sanitizeCliLine(team.name)}.\n`);
+    return team;
   }
   if (teams.length === 1) return first;
   if (options.noInput)
@@ -497,7 +500,12 @@ export const resolveTeamForProject = async (
   const name = (
     await options.prompt(`Team name [${options.suggestedName}]`)
   ).trim();
-  return createTeam(client, name.length > 0 ? name : options.suggestedName);
+  const team = await createTeam(
+    client,
+    name.length > 0 ? name : options.suggestedName,
+  );
+  write(`Created the team ${sanitizeCliLine(team.name)}.\n`);
+  return team;
 };
 
 export const listEnvironments = async (
@@ -633,7 +641,7 @@ export const resolveEnvironmentReference = async (
 export const createEnvironment = async (
   client: Pick<StrictJsonClient, "post">,
   projectId: string,
-  label = "default",
+  label = "development",
 ): Promise<EnvironmentSummary> => {
   const response = await client.post(
     `/api/v1/projects/${encodeURIComponent(requireOpaqueId(projectId, "project id"))}/environments`,

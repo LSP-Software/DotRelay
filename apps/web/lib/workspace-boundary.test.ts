@@ -342,6 +342,25 @@ test("enrolled Device rows include this browser and peer Devices", () => {
   ]);
 });
 
+test("a project key the account key wraps reaches every device", () => {
+  const rows = enrolledDeviceRows(
+    {
+      device: { active: true, id: "00000000-0000-4000-8000-000000000040" },
+      grantsReady: false,
+      peerDevices: [
+        {
+          id: "00000000-0000-4000-8000-000000000041",
+          encryptionPublicKey: "aa",
+          signingPublicKey: "bb",
+          hasEpochGrant: false,
+        },
+      ],
+    },
+    { thisBrowserEnrolled: true, keysNotPerDevice: true },
+  );
+  expect(rows.map((row) => row.hasEpochGrant)).toEqual([true, true]);
+});
+
 test("enrolled Device rows stay valid without display metadata", () => {
   expect(
     enrolledDeviceRows(

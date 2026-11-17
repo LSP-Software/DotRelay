@@ -13,7 +13,9 @@ workspace.
 
 A Project is listed by its linked GitHub owner and name when they are known, otherwise by
 the stable numeric GitHub repository id. Environment tabs use the operator-visible label. Device
-approval lives at `/device` and is opened from CLI setup or login.
+approval lives at `/device` and is opened from CLI setup or login. A signed-out visitor goes
+straight to GitHub and comes back to the Allow step; after a failed sign-in the page shows the
+error and a **Continue with GitHub** button instead of retrying.
 
 The Devices page lists every enrolled Device for your User, including CLI
 installations, and whether this browser is one of them.

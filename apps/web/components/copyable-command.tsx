@@ -29,13 +29,20 @@ type CopyableCommandProps = Readonly<{
   readonly value: string;
   readonly className?: string;
   readonly "data-testid"?: string | undefined;
+  /**
+   * What the copy button copies, for screen readers. A value that isn't a
+   * terminal command (a recovery code) names itself and drops the `$`.
+   */
+  readonly copyLabel?: string;
 }>;
 
 export const CopyableCommand = ({
   value,
   className,
   "data-testid": testId,
+  copyLabel,
 }: CopyableCommandProps) => {
+  const isCommand = copyLabel === undefined;
   const codeRef = useRef<HTMLElement>(null);
   const [copiedAt, setCopiedAt] = useState<number | null>(null);
   const copied = copiedAt !== null;
@@ -60,12 +67,14 @@ export const CopyableCommand = ({
         className,
       )}
     >
-      <span
-        aria-hidden="true"
-        className="select-none font-mono text-xs leading-5 text-primary"
-      >
-        $
-      </span>
+      {isCommand ? (
+        <span
+          aria-hidden="true"
+          className="select-none font-mono text-xs leading-5 text-primary"
+        >
+          $
+        </span>
+      ) : null}
       <code
         className="min-w-0 flex-1 whitespace-pre-wrap font-mono text-xs leading-5 text-foreground select-text [overflow-wrap:anywhere]"
         data-testid={testId}
@@ -77,7 +86,9 @@ export const CopyableCommand = ({
         <TooltipTrigger
           render={
             <Button
-              aria-label={copied ? "Copied" : "Copy command"}
+              aria-label={
+                copied ? "Copied" : isCommand ? "Copy command" : copyLabel
+              }
               className="-mr-1 shrink-0 cursor-pointer"
               onClick={() => void copy()}
               size="icon-xs"

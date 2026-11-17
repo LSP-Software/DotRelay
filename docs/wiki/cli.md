@@ -73,8 +73,9 @@ selected it trusts and selects `https://dev-api.dotrelay.dev` on first use — a
 `npm install -g @dotrelay/cli@dev` and then `dotrelay login` without a `setup` step. Its version
 records the commit it was built from (`@dotrelay/cli@0.0.0-dev.<commit-sha>`), and
 `dotrelay --version` reporting a `0.0.0-dev` identifier names a dev build. Release tags publish
-the `latest` flavor instead: that binary targets no origin, so a new machine still begins with
-`dotrelay setup <origin>` (for the hosted service, `https://api.dotrelay.dev`). A dev build that
+the `latest` flavor instead: that binary targets the hosted service, `https://api.dotrelay.dev`,
+the same way, so a new machine runs `dotrelay login` or `dotrelay setup` without naming a server.
+Only a self-hosted installation passes its own address, as `dotrelay setup <origin>`. A dev build that
 also needs the hosted service adds it with `dotrelay profile add` and `dotrelay profile use`.
 
 ## Updates
@@ -107,7 +108,8 @@ turns the check off. The check never holds a finished command for more than two 
 
 ## First machine and sign-in
 
-The first invocation has no ambient Server Profile. `dotrelay setup <origin>` fetches and verifies
+The first invocation has no ambient Server Profile. `dotrelay setup [<origin>]` (the origin defaults
+to the one the build targets, else the hosted service) fetches and verifies
 `/api/v1/capabilities`, saves that pin, selects it, signs in with Better Auth device authorization,
 and enrolls the first Device on this machine. Adding a profile selects it when none is selected.
 A command-level `--profile <name>` override wins over the global selection. The catalog stores only
@@ -195,8 +197,10 @@ repository remote, and verified repository identity opaque ids, never Values or 
 the CLI chooses automatically only when exactly one active Environment is available; otherwise
 it lists the Environment labels and asks. Archived Environments are never selected automatically
 and can only be addressed with an explicit `--environment`. The saved selection is written only
-after the command succeeds, so a failed or declined run leaves it untouched. `--no-input`
-requires the profile to be supplied explicitly and never guesses a Team or Environment: for
+after the command succeeds, so a failed or declined run leaves it untouched; when an explicit
+`--environment` replaces it, `push`, `pull`, `rollback` and `init` say so. `--no-input`
+uses the selected server profile unless `--profile` names another, and never guesses a Team or
+Environment: for
 `pull`, `diff`, `history`, and `rollback` the Environment must be explicit or already saved in
 the worktree, while `init` and `push` may additionally use the Project's single active
 Environment.
@@ -224,7 +228,7 @@ Environment gets it instead of `default`.
 `project link --team <team-id>` sends the resolved numeric Repository id to the authenticated
 Server Profile. The Server Profile resolves the owner and name again with the User's Delegated
 GitHub Access and links the Project only when GitHub reports the same Repository id
-(`repository_access_denied` otherwise). It creates a default Environment in the same transaction
+(`repository_access_denied` otherwise). It creates a `development` Environment in the same transaction
 when the Project is new, and returns the existing Project and Environment on retry. It requires an
 authenticated session and an active enrolled Device; a session from `login` alone is insufficient
 until this machine has a Device.
@@ -585,15 +589,15 @@ worktree, the Project and Environment, with the Repository and Environment in it
 ends with `All set` or the next command to run. When the selected Project owes a key rotation, the card adds the same advice line that
 protected commands print. In a worktree this machine has not linked yet, it suggests `dotrelay pull` (when a
 teammate already published the Repository) or `dotrelay init`. Without a Server Profile it names
-`dotrelay setup https://api.dotrelay.dev`, the hosted service; a self-hosted installation uses its
-own origin. It never dumps key:value local state.
+`dotrelay setup`; a self-hosted installation adds its own origin. It never dumps key:value local state.
 
 The first Device uses the server's initial trust bootstrap and stores the encrypted Device bundle
 in the local credential store, with a protected local record for its profile and Device id.
 The browser is a separate Device. Bootstrap is first-Device-only, so once the User already has
-an active Device, a new installation or browser joins through enrollment instead: it generates
-its keys and self-starts the enrollment, and one of the User's existing Devices (which may be
-the only one) approves it.
+an active Device, a new installation joins through enrollment instead: it generates its keys
+and self-starts the enrollment, and one of the User's existing Devices (which may be the only
+one) approves it. A browser has no way to hand its request to another Device, so it doesn't
+enroll: it unlocks with the account's recovery code, which creates its Device.
 `device enroll` bootstraps the first Device, or self-starts that enrollment when the User
 already has one; the explicit form is `device begin --output <request>`. Move the signed
 request artifact to an existing authorized installation and run `device approve --from
@@ -617,7 +621,7 @@ a headless machine. A new code invalidates the previous one, so store it somewhe
 Recovery Code is entered at a hidden prompt, piped on stdin, or read from `--recovery-code-file
 <path>` (a regular 0600 file, never a symlink); it is never placed on the command line and never sent to the Server
 Profile. Recovery uses the Server Profile's account-key routes and never falls back to initial
-bootstrap. `--no-input` requires an explicit profile and a `--recovery-code-file` or `--transfer`
+bootstrap. `--no-input` requires a `--recovery-code-file` or `--transfer`
 channel, and never answers a prompt on the user's behalf. `device recover --transfer <code>` takes
 the whole transfer code the sending Device printed. It accepts the key only when the account's
 signed roster lists the sending Device and this one, and only when the key's account fingerprint
@@ -628,7 +632,7 @@ matches the code. A bare transfer id shows the fingerprint and asks; `--no-input
 The supported pattern is a persistent runner: a machine (or a container with a persistent volume
 for `DOTRELAY_CONFIG_DIR`) that a person signs in and enrolls once, like any other Device:
 
-1. On the runner, run `dotrelay setup https://api.dotrelay.dev` (or your own origin), or
+1. On the runner, run `dotrelay setup` (add your own origin if you self-host), or
    `dotrelay login --profile <name>` for a saved profile. Sign in as the account the runner acts
    for, and unlock the Device with `dotrelay device recover` if the account already has one.
 2. Make sure that account can read the Project. A dedicated account must be a Team Member whose

@@ -35,7 +35,7 @@ import type { TerminalIo } from "./terminal";
 describe("CLI foundation", () => {
   test("renders everyday help by default and power commands under help", async () => {
     expect(main(["--help"])).toBe(renderHelp());
-    expect(renderHelp()).toContain("setup <origin>");
+    expect(renderHelp()).toContain("setup [<origin>]");
     expect(renderHelp()).toContain("diff");
     expect(renderHelp()).not.toContain("device begin");
     const result = await run(["help"]);
@@ -81,7 +81,10 @@ describe("CLI foundation", () => {
           if (url.endsWith("/api/v1/session"))
             return Response.json({
               authenticated: true,
-              user: { id: "22222222-2222-4222-8222-222222222222" },
+              user: {
+                id: "22222222-2222-4222-8222-222222222222",
+                name: "Ada Lovelace",
+              },
             });
           return Response.json(createProblem("resource_not_found"), {
             status: 404,
@@ -94,6 +97,8 @@ describe("CLI foundation", () => {
         origin: "https://relay.example",
         service: "verified",
         session: "verified",
+        // The signed-in account is named, not just "GitHub".
+        account: "Ada Lovelace",
         device: "not-enrolled",
         nextAction: "run dotrelay device enroll",
       });
@@ -897,17 +902,18 @@ describe("command-to-HTTP administration", () => {
         code: "device_bundle_missing",
         exitCode: 6,
       });
-      expect(String(diagnostic.detail)).toContain("device enroll");
+      expect(String(diagnostic.detail)).toContain("dotrelay login");
       const human = await run(
         ["project", "link", "--team", teamId],
         runtimeForCommandState(state),
       );
       expect(human.exitCode).toBe(6);
       const humanText = human.stderr.replace(/\n│ +/g, " ");
-      expect(humanText).toContain("This machine isn't enrolled on this server");
+      expect(humanText).toContain("This machine isn't enrolled on");
       expect(humanText).toContain(
-        "Run dotrelay login, or dotrelay device enroll",
+        "dotrelay login signs you in with GitHub and enrolls this machine",
       );
+      expect(humanText).not.toContain("device enroll");
       expect(fixture.requests).toHaveLength(0);
     } finally {
       fixture.stop();
@@ -981,7 +987,7 @@ describe("command-to-HTTP administration", () => {
         code: "device_bundle_missing",
         exitCode: 6,
       });
-      expect(String(diagnostic.detail)).toContain("device enroll");
+      expect(String(diagnostic.detail)).toContain("dotrelay login");
       expect(fixture.requests).toHaveLength(0);
     } finally {
       fixture.stop();
@@ -1598,9 +1604,7 @@ describe("protected command Environment selection", () => {
         { ...runtimeForProtocolState(state), confirm: async () => false },
       );
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain(
-        `You didn't confirm, so ${outputPath} wasn't changed`,
-      );
+      expect(result.stderr).toContain(`└  ${outputPath} wasn't changed`);
       expect(JSON.parse(await Bun.file(state.contextPath).text())).toEqual({
         serverProfileId,
         projectId,
@@ -3545,6 +3549,35 @@ describe("CLI sign-in display", () => {
     }
   });
 
+  test("setup with a bare localhost address falls back to plain HTTP", async () => {
+    const stateDirectory = await mkdtemp(join(tmpdir(), "dotrelay-loopback-"));
+    const requested: string[] = [];
+    try {
+      const result = await run(
+        ["setup", "localhost:3999", "--json", "--no-input"],
+        {
+          profilePath: join(stateDirectory, "profiles.json"),
+          stateDirectory,
+          fetch: async (input) => {
+            const url = String(input);
+            requested.push(url);
+            if (url.startsWith("https://"))
+              throw new TypeError("connect ECONNREFUSED");
+            return Response.json(createProblem("service_unavailable"), {
+              status: 503,
+            });
+          },
+        },
+      );
+      expect(result.exitCode).not.toBe(0);
+      // HTTPS was tried first, then the same host over plain HTTP.
+      expect(requested[0]).toBe("https://localhost:3999/api/v1/capabilities");
+      expect(requested).toContain("http://localhost:3999/api/v1/capabilities");
+    } finally {
+      await rm(stateDirectory, { recursive: true, force: true });
+    }
+  });
+
   test("setup --no-open --no-input --json emits the authorization event before waiting", async () => {
     const fixture = await createLoginFixture({ emptyCatalog: true });
     const captured = captureTerminal();
@@ -4313,8 +4346,7 @@ describe("status verifies the session and this Device", () => {
         service: "skipped",
         session: "not-stored",
         device: "not-enrolled",
-        nextAction:
-          "run dotrelay setup https://api.dotrelay.dev (or your own origin if you self-host)",
+        nextAction: "run dotrelay setup",
       });
     } finally {
       await (
@@ -4719,8 +4751,13 @@ describe("actionable error categories at the process boundary", () => {
         expect(human.exitCode).toBe(6);
         // The card wraps long steps onto the rail; the words stay in order.
         const unwrapped = human.stderr.replace(/\n│ +/g, " ");
-        for (const line of (diagnostic.detail as string).split("\n"))
-          expect(unwrapped).toContain(line);
+        // JSON keeps the full detail; the card's headline already says what
+        // its opening sentence would, so the card shows the steps only.
+        const [lead, ...steps] = (diagnostic.detail as string).split("\n");
+        expect(lead).toBe("DotRelay can't access this GitHub repository.");
+        expect(unwrapped).toContain("DotRelay can't see this repository");
+        expect(unwrapped).not.toContain(lead);
+        for (const line of steps) expect(unwrapped).toContain(line);
         expect(human.stdout).toBe("");
         expect(result.stdout).toBe("");
       }

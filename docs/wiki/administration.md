@@ -44,7 +44,7 @@ Environment is restored under an active Project.
 
 `POST /api/v1/projects` creates the Project's first Environment in the same transaction. An
 optional `environmentLabel` names it, under the same rules as `POST
-/api/v1/projects/:projectId/environments`; without one it is `default`. Linking a Repository that
+/api/v1/projects/:projectId/environments`; without one it is `development`. Linking a Repository that
 already has an active Project returns that Project and ignores the label.
 
 The service stores opaque Environment ids, an operator-visible label (default `default`),
