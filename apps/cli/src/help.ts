@@ -312,8 +312,8 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       "Enroll this machine as your first device. If your account already has an enrolled device, this starts an enrollment request instead, and you approve it from that device.",
     options: {
       output: "file to write the signed enrollment request to",
-      profile: "server profile to enroll on (required with --no-input)",
-      noInput: "never prompt. Needs --profile",
+      profile: "server profile to enroll on (default: the selected profile)",
+      noInput: "never prompt",
     },
     examples: ["dotrelay device enroll"],
   },
@@ -322,8 +322,8 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       "Start enrolling this machine and write a signed request file for one of your other devices to approve. The file holds only public data.",
     options: {
       output: "request file to write",
-      profile: "server profile to enroll on (required with --no-input)",
-      noInput: "never prompt. Needs --profile",
+      profile: "server profile to enroll on (default: the selected profile)",
+      noInput: "never prompt",
     },
     examples: ["dotrelay device begin --output enrollment-request.json"],
   },
@@ -332,8 +332,8 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       "Approve an enrollment request from a second device that's already authorized, using the signed request file.",
     options: {
       from: "signed request file to approve (required)",
-      profile: "server profile to enroll on (required with --no-input)",
-      noInput: "never prompt. Needs --profile",
+      profile: "server profile to enroll on (default: the selected profile)",
+      noInput: "never prompt",
     },
     examples: ["dotrelay device approve --from enrollment-request.json"],
   },
@@ -342,8 +342,8 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       "Finish an approved enrollment on the device that started it, once the approved request file comes back.",
     options: {
       from: "approved request file to finish with (required)",
-      profile: "server profile to enroll on (required with --no-input)",
-      noInput: "never prompt. Needs --profile",
+      profile: "server profile to enroll on (default: the selected profile)",
+      noInput: "never prompt",
     },
     examples: ["dotrelay device complete --from enrollment-request.json"],
   },
@@ -355,8 +355,8 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       "A new recovery code replaces the old one, which stops working. Store the new one somewhere safe.",
     ],
     options: {
-      profile: "server profile to back up (required with --no-input)",
-      noInput: "never prompt. Needs --profile",
+      profile: "server profile to back up (default: the selected profile)",
+      noInput: "never prompt",
     },
     examples: ["dotrelay device backup"],
   },
@@ -372,8 +372,8 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       recoveryCodeFile:
         "path to a file with mode 0600 that holds the recovery code (13 groups of 4 characters). Meant for scripts",
       transfer: TRANSFER_CODE,
-      profile: "server profile to recover on (required with --no-input)",
-      noInput: "never prompt. Needs --profile",
+      profile: "server profile to recover on (default: the selected profile)",
+      noInput: "never prompt",
     },
     examples: [
       "dotrelay device recover",
@@ -389,8 +389,8 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       "If this server has no session yet, run dotrelay login first.",
     ],
     options: {
-      profile: "server profile to set up (required with --no-input)",
-      noInput: "never prompt. Needs --profile",
+      profile: "server profile to set up (default: the selected profile)",
+      noInput: "never prompt",
     },
     examples: ["dotrelay device setup"],
   },
@@ -406,8 +406,9 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
     ],
     options: {
       to: "id of the receiving device (required with --no-input)",
-      profile: "server profile to transfer from (required with --no-input)",
-      noInput: "never prompt. Needs --profile",
+      profile:
+        "server profile to transfer from (default: the selected profile)",
+      noInput: "never prompt",
     },
     examples: [
       "dotrelay device transfer",
@@ -424,8 +425,8 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
     options: {
       wrapperId:
         "full id of the wrapper to revoke. Leave it out to pick from a list. Required with --no-input",
-      profile: "server profile to revoke on (required with --no-input)",
-      noInput: "never prompt. Needs --profile",
+      profile: "server profile to revoke on (default: the selected profile)",
+      noInput: "never prompt",
     },
     examples: [
       "dotrelay device revoke-wrapper",
@@ -452,7 +453,7 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
     about:
       "Move the linked project to a new epoch and seal a new project key for your account's devices. Use this when a device has been granted the current epoch but never received its key.",
     options: {
-      profile: "server profile to rotate on (required with --no-input)",
+      profile: "server profile to rotate on (default: the selected profile)",
       noInput: "never prompt. Needs --force",
       force: "confirm the rotation with --no-input",
     },

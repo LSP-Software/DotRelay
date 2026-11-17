@@ -3943,6 +3943,8 @@ describe("protected CLI workflows", () => {
     expect(history.stdout).toContain("Team");
     expect(history.stdout).toContain("value changed");
     expect(history.stdout).toContain("current");
+    // Each Revision names who published it.
+    expect(history.stdout).toContain("by you");
     expect(history.stdout).toMatch(/\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/);
     // History output never carries Values, even the ones this Device can read.
     expect(history.stdout).not.toContain("postgres://secret");

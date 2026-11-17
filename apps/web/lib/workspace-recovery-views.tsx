@@ -976,6 +976,7 @@ export const RecoveryCodeDialog = ({
         <div className="space-y-3">
           <Label>Your recovery code</Label>
           <CopyableCommand
+            copyLabel="Copy recovery code"
             data-testid="recovery-code-value"
             value={code ?? ""}
           />

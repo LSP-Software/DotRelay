@@ -29,6 +29,7 @@ import {
   uuidToBytes,
 } from "@dotrelay/contracts";
 import { createStrictJsonClient, type StrictJsonClient } from "./admin";
+import { railText } from "./components";
 import { deviceMetadataPath, writeDeviceId } from "./device-storage";
 import { CliError, CliInvocationError } from "./errors";
 import { readTerminalSecret, selectOption } from "./ui";
@@ -416,6 +417,11 @@ export const readRecoveryCode = async (
       {},
       "recovery_code_required",
     );
+  // Say why the code is needed before asking for it: on a new machine the
+  // question would otherwise appear out of nowhere.
+  (options.terminal?.output ?? process.stderr).write(
+    `${railText("Your account is already set up on another device or browser. Enter the recovery code you saved then to unlock it on this machine.")}\n`,
+  );
   return await readTerminalSecret("Recovery code", {
     ...(options.terminal ? { terminal: options.terminal } : {}),
     ...(options.prompt ? { prompt: options.prompt } : {}),

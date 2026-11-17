@@ -3,11 +3,14 @@ import {
   type DecodedVariable,
   type SyncPageWire,
 } from "@dotrelay/client";
-import type { SyncRevisionWire } from "@dotrelay/contracts";
+import {
+  bytesToUuid,
+  parseProtocolObject,
+  type SyncRevisionWire,
+} from "@dotrelay/contracts";
 import { bar, GLYPHS, heading } from "./components";
 import { sanitizeCliLine, sanitizeCliText } from "./errors";
 import type { Tone } from "./theme";
-
 import { paint } from "./ui";
 import { classificationFromOwnership } from "./workflow-publication";
 import type { syncWorkflow } from "./workflow-session";
@@ -106,6 +109,48 @@ export const revisionHistoryRows = (
   return Object.freeze(rows);
 };
 
+// The author lives in the signed Revision object, not the wire record. Only
+// read it from a page the session verified: the signature covers it there,
+// so it is what the signer wrote.
+export const revisionAuthorUserId = (
+  revision: SyncRevisionWire,
+): string | null => {
+  try {
+    const object = revision.objects.find(
+      (candidate) =>
+        candidate.digest.length === revision.digest.length &&
+        candidate.digest.every(
+          (byte, index) => byte === revision.digest[index],
+        ),
+    );
+    if (!object) return null;
+    const author = parseProtocolObject(object.canonicalBytes).get(22);
+    return author instanceof Uint8Array && author.length === 16
+      ? bytesToUuid(author)
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+/** Who published each Revision, as this Device can name them. */
+export type HistoryAuthors = Readonly<{
+  readonly actorUserId?: string | undefined;
+  readonly names: ReadonlyMap<string, string>;
+}>;
+
+const authorLabel = (
+  revision: SyncRevisionWire,
+  authors: HistoryAuthors | undefined,
+): string | null => {
+  if (!authors) return null;
+  const userId = revisionAuthorUserId(revision);
+  if (userId === null) return null;
+  if (userId === authors.actorUserId) return "by you";
+  const name = authors.names.get(userId);
+  return name ? `by ${sanitizeCliLine(name)}` : "by a former member";
+};
+
 const mutationLabel = (mutation: number): string =>
   mutation === 1
     ? "Created"
@@ -136,6 +181,7 @@ const revisionDate = (authoredAtMs: bigint): string => {
 export const renderRevisionHistory = (
   environment: string,
   rows: readonly RevisionHistoryRow[],
+  authors?: HistoryAuthors,
 ): string => {
   // History reads like every other command: each line on the rail, and a
   // closing mark.
@@ -182,6 +228,7 @@ export const renderRevisionHistory = (
   const lines: string[] = [headingLine, bar(), environmentLine, bar()];
   for (const row of rows) {
     const marker = row.current ? paint("  current", "brand") : "         ";
+    const author = authorLabel(row.revision, authors);
     lines.push(
       `${bar()}  ${paint(`#${row.ordinal}`, "muted")}  ${paint(
         revisionDate(row.revision.authoredAtMs),
@@ -189,7 +236,7 @@ export const renderRevisionHistory = (
       )}  ${paint(sanitizeCliLine(row.revision.id), "faint")}  ${paint(
         summaryFor(row),
         mutationTone(row.revision.mutation),
-      )}${marker}`,
+      )}${author ? `  ${paint(author, "muted")}` : ""}${marker}`,
     );
     for (const change of row.changes) {
       const ownership = paint(
@@ -219,6 +266,7 @@ export const renderRevisionHistory = (
 export const renderSyncedHistory = (
   synced: Awaited<ReturnType<typeof syncWorkflow>>,
   environmentLabel?: string,
+  authors?: HistoryAuthors,
 ): string =>
   renderRevisionHistory(
     environmentLabel ?? synced.page.environmentId,
@@ -226,4 +274,5 @@ export const renderSyncedHistory = (
       synced.page,
       synced.workflow.session.revisionSnapshots(),
     ),
+    authors,
   );

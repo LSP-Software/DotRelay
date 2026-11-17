@@ -169,8 +169,10 @@ repository remote, and verified repository identity opaque ids, never Values or 
 the CLI chooses automatically only when exactly one active Environment is available; otherwise
 it lists the Environment labels and asks. Archived Environments are never selected automatically
 and can only be addressed with an explicit `--environment`. The saved selection is written only
-after the command succeeds, so a failed or declined run leaves it untouched. `--no-input`
-requires the profile to be supplied explicitly and never guesses a Team or Environment: for
+after the command succeeds, so a failed or declined run leaves it untouched; when an explicit
+`--environment` replaces it, `push`, `pull`, `rollback` and `init` say so. `--no-input`
+uses the selected server profile unless `--profile` names another, and never guesses a Team or
+Environment: for
 `pull`, `diff`, `history`, and `rollback` the Environment must be explicit or already saved in
 the worktree, while `init` and `push` may additionally use the Project's single active
 Environment.
@@ -591,7 +593,7 @@ a headless machine. A new code invalidates the previous one, so store it somewhe
 Recovery Code is entered at a hidden prompt, piped on stdin, or read from `--recovery-code-file
 <path>` (a regular 0600 file, never a symlink); it is never placed on the command line and never sent to the Server
 Profile. Recovery uses the Server Profile's account-key routes and never falls back to initial
-bootstrap. `--no-input` requires an explicit profile and a `--recovery-code-file` or `--transfer`
+bootstrap. `--no-input` requires a `--recovery-code-file` or `--transfer`
 channel, and never answers a prompt on the user's behalf. `device recover --transfer <code>` takes
 the whole transfer code the sending Device printed. It accepts the key only when the account's
 signed roster lists the sending Device and this one, and only when the key's account fingerprint

@@ -3549,6 +3549,35 @@ describe("CLI sign-in display", () => {
     }
   });
 
+  test("setup with a bare localhost address falls back to plain HTTP", async () => {
+    const stateDirectory = await mkdtemp(join(tmpdir(), "dotrelay-loopback-"));
+    const requested: string[] = [];
+    try {
+      const result = await run(
+        ["setup", "localhost:3999", "--json", "--no-input"],
+        {
+          profilePath: join(stateDirectory, "profiles.json"),
+          stateDirectory,
+          fetch: async (input) => {
+            const url = String(input);
+            requested.push(url);
+            if (url.startsWith("https://"))
+              throw new TypeError("connect ECONNREFUSED");
+            return Response.json(createProblem("service_unavailable"), {
+              status: 503,
+            });
+          },
+        },
+      );
+      expect(result.exitCode).not.toBe(0);
+      // HTTPS was tried first, then the same host over plain HTTP.
+      expect(requested[0]).toBe("https://localhost:3999/api/v1/capabilities");
+      expect(requested).toContain("http://localhost:3999/api/v1/capabilities");
+    } finally {
+      await rm(stateDirectory, { recursive: true, force: true });
+    }
+  });
+
   test("setup --no-open --no-input --json emits the authorization event before waiting", async () => {
     const fixture = await createLoginFixture({ emptyCatalog: true });
     const captured = captureTerminal();

@@ -447,6 +447,16 @@ const statusRow = (
     : `${head}  ${dot}`;
 };
 
+// A profile named after its server's address says nothing the server row
+// doesn't already show.
+const isDefaultProfileName = (profile: string, origin: string): boolean => {
+  try {
+    return profile === profileNameFromOrigin(origin);
+  } catch {
+    return false;
+  }
+};
+
 const renderStatusCard = (value: Record<string, unknown>): string => {
   const profile = typeof value.profile === "string" ? value.profile : "";
   const origin = typeof value.origin === "string" ? value.origin : "";
@@ -476,7 +486,7 @@ const renderStatusCard = (value: Record<string, unknown>): string => {
       host,
       service === "offline"
         ? { text: "unreachable", tone: "warn" }
-        : profile && profile !== host
+        : profile && profile !== host && !isDefaultProfileName(profile, origin)
           ? { text: `profile ${profile}`, tone: "faint" }
           : undefined,
     ),
@@ -1623,15 +1633,20 @@ const execute = async (
   await hardenLocalState(runtime.stateDirectory ?? dirname(catalogPath));
   const store = createFileProfileCatalog(catalogPath);
   if (parsed.command === "setup") {
-    const origin = withDefaultProtocol(parsed.positionals[0] ?? setupOrigin);
+    // The address goes to discovery as typed: without a scheme, a loopback
+    // host such as localhost falls back to plain HTTP when HTTPS can't be
+    // reached, which only works if discovery sees that no scheme was given.
+    const requested = parsed.positionals[0] ?? setupOrigin;
+    const origin = withDefaultProtocol(requested);
     const catalog = await store.read();
+    const plainHttp = origin.replace(/^https:/, "http:");
     const existing = catalog.profiles.find(
-      (profile) => profile.origin === origin,
+      (profile) => profile.origin === origin || profile.origin === plainHttp,
     );
     const profile = await addServerProfile(
       store,
       existing?.name ?? profileNameFromOrigin(origin),
-      origin,
+      requested,
       {
         ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
         ...(runtime.networkPolicy
@@ -1733,7 +1748,12 @@ const execute = async (
     if (!name) throw new Error("dotrelay profile use needs a profile name.");
     const profile = await useServerProfile(store, name);
     return {
-      value: { profile: profile.name, origin: profile.origin, selected: true },
+      value: {
+        profile: profile.name,
+        origin: profile.origin,
+        selected: true,
+        message: "selected",
+      },
     };
   }
   if (parsed.command === "profile" && parsed.subcommand === "list") {
@@ -2230,7 +2250,9 @@ const execute = async (
       value: {
         profile: profile.name,
         environmentId: environment.id,
+        environment: environment.label,
         selected: true,
+        message: "selected",
       },
     };
   }
@@ -2728,6 +2750,10 @@ const execute = async (
             githubRepositoryId: resolved.identity,
           },
         }));
+      if (existingProject === null && !parsed.json)
+        write(
+          `Created a project for ${sanitizeCliLine(`${resolved.owner}/${resolved.name}`)}.\n`,
+        );
       // A saved Project that is no longer an eligible destination (archived,
       // relinked, or Membership lost) stops steering the change: its
       // saved Environment is validated against the resolved Project below,
@@ -2855,6 +2881,20 @@ const execute = async (
         ? { environmentId: contextToSave.environmentId }
         : {}),
     };
+    // An explicit --environment is remembered for this worktree. Say so when
+    // it replaces the saved one, or the next plain command surprises.
+    const noteSwitchedEnvironment = (): void => {
+      const previous = localContext?.environmentId;
+      const next = contextToSave?.environmentId;
+      if (parsed.json || !previous || !next || previous === next) return;
+      // Commands that print their result to stdout would show the note
+      // above their output, so only the publish-style ones carry it.
+      if (!["push", "pull", "rollback", "init"].includes(parsed.command))
+        return;
+      (runtime.terminal?.output ?? process.stderr).write(
+        `${railText(`Later commands in this repository use ${sanitizeCliLine(parsed.environment ?? "this environment")} too. To switch back, run dotrelay env use <label>.`, "faint")}\n`,
+      );
+    };
     // run, export, and list read the Environment like pull, without
     // writing anything; the other protected commands are the sync workflow.
     if (parsed.command === "run") {
@@ -2864,6 +2904,7 @@ const execute = async (
         runtime.spawn,
       );
       if (contextToSave) await writeWorktreeContext(contextPath, contextToSave);
+      noteSwitchedEnvironment();
       return { value: { stdout: "" }, exitCode };
     }
     const workflowResult =
@@ -2876,6 +2917,7 @@ const execute = async (
     // so a failed or declined operation leaves the saved Environment
     // untouched.
     if (contextToSave) await writeWorktreeContext(contextPath, contextToSave);
+    noteSwitchedEnvironment();
     return { value: workflowResult };
   }
   throw new CliError(

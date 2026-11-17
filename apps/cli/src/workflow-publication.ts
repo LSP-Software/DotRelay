@@ -702,6 +702,13 @@ export const publish = async (
   };
   if (!draftVariables.some((variable) => variable.hasDraftChange)) {
     await settleFallbackBaseline(options, reconciliation);
+    // Name the environment, so "nothing to do" can't hide that the command
+    // looked at a different one than expected.
+    const { environment } = await destinationFor(
+      options,
+      synced.workflow.publicationContext,
+      synced.workflow.deviceId,
+    );
     return {
       revision: synced.page.currentHeadId,
       lanes: 0,
@@ -709,6 +716,7 @@ export const publish = async (
       // JSON `message` status values stay stable for scripts; the human
       // renderer capitalises them.
       message: "up to date, nothing to publish",
+      summary: `Nothing to publish: ${environment} already matches`,
       ...pendingActionsField(synced.workflow.pendingActions),
     };
   }

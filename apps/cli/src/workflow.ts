@@ -35,9 +35,10 @@ import {
   ask,
   bytesToHex,
   confirmSilent,
+  createDeviceAdmin,
   type WorkflowOptions,
 } from "./workflow-core";
-import { renderSyncedHistory } from "./workflow-history";
+import { type HistoryAuthors, renderSyncedHistory } from "./workflow-history";
 import {
   classificationFromOwnership,
   classify,
@@ -91,6 +92,39 @@ const readDotenvInput = async (inputPath: string): Promise<string> => {
   }
 };
 
+// Member names for "by <name>" in history. A failed lookup only drops the
+// names; the verified history still renders.
+const historyAuthors = async (
+  options: WorkflowOptions,
+  synced: Awaited<ReturnType<typeof syncWorkflow>>,
+): Promise<HistoryAuthors> => {
+  const { actorUserId, teamId } = synced.workflow.publicationContext;
+  const names = new Map<string, string>();
+  if (teamId)
+    try {
+      const listed = await createDeviceAdmin(
+        options,
+        synced.workflow.deviceId,
+      ).get(`/api/v1/teams/${encodeURIComponent(teamId)}/memberships`, [
+        "memberships",
+        "invitations",
+      ]);
+      for (const entry of Array.isArray(listed.memberships)
+        ? listed.memberships
+        : [])
+        if (
+          entry !== null &&
+          typeof entry === "object" &&
+          typeof entry.userId === "string" &&
+          typeof entry.name === "string"
+        )
+          names.set(entry.userId, entry.name);
+    } catch {
+      // Names are a nicety; the history itself is already verified.
+    }
+  return { actorUserId, names };
+};
+
 export const runProtectedWorkflow = async (
   options: WorkflowOptions,
   parsed: ParsedArguments,
@@ -103,7 +137,13 @@ export const runProtectedWorkflow = async (
         synced.workflow.publicationContext,
         synced.workflow.deviceId,
       );
-      return { stdout: renderSyncedHistory(synced, environment) };
+      return {
+        stdout: renderSyncedHistory(
+          synced,
+          environment,
+          await historyAuthors(options, synced),
+        ),
+      };
     }
     return {
       revisions: synced.page.revisions.map((revision) => ({
