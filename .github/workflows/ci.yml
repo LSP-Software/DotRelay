@@ -283,6 +283,9 @@ jobs:
         security,
       ]
     uses: ./.github/workflows/deploy.yml
+    # A called workflow sees no secrets, not even its environment's, unless
+    # the caller passes them on.
+    secrets: inherit
     with:
       environment: dev
       commit: ${{ github.sha }}
