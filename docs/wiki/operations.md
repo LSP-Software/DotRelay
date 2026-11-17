@@ -246,8 +246,8 @@ the `read`, `write` and `deploy` permissions and **access limited to that
 environment** (DotRelay → dev, or DotRelay → production). `write` is needed to
 pin the commit; the environment scope keeps the token away from every other
 Coolify resource. `security-review` also holds the Docker Hub credentials for
-the self-hosted images: the `DOCKERHUB_USERNAME` variable and the
-`DOCKERHUB_TOKEN` secret (a Docker Hub access token with Read & Write). No
+the self-hosted images: the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`
+secrets (a Docker Hub access token with Read & Write). No
 deployment credential is a repository-wide secret.
 
 ### Self-hosted images and manual maintenance
