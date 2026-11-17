@@ -2925,6 +2925,15 @@ const selectedOrigin = async (
   }
 };
 
+// The exact command to run again, including what follows `--` for
+// `dotrelay run`, quoted so it can be pasted into a POSIX shell.
+const shellWord = (word: string): string =>
+  /^[A-Za-z0-9_@%+=:,./-]+$/u.test(word)
+    ? word
+    : `'${word.replaceAll("'", "'\\''")}'`;
+const retryCommand = (args: readonly string[]): string =>
+  ["dotrelay", ...args.map(shellWord)].join(" ");
+
 /** A guided fix was offered and turned down; the run ends here. */
 class GuidanceDeclined extends Error {
   readonly original: unknown;
@@ -3013,9 +3022,7 @@ const executeGuided = async (
         throw new GuidanceDeclined(
           thrown,
           guidance.next ??
-            (offer.fix.kind === "retry"
-              ? `dotrelay ${own.join(" ")}`
-              : undefined),
+            (offer.fix.kind === "retry" ? retryCommand(args) : undefined),
         );
       const nested: CliRuntime = { ...runtime, nested: true };
       if (offer.fix.kind !== "retry") {

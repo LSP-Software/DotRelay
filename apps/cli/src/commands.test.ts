@@ -1807,6 +1807,33 @@ describe("guided runs offer the fix and carry on", () => {
     }
   });
 
+  test("a declined retry names the whole command, including what dotrelay run starts", async () => {
+    const server = startServer([]);
+    const state = await seedState(server.pin, { context: linkedContext });
+    const captured = captureTerminal();
+    try {
+      const result = await run(
+        ["run", "--profile", "relay", "--", "sh", "-c", "echo it's up"],
+        {
+          ...state.runtime,
+          terminal: captured.terminal,
+          guide: true,
+          fetch: async () => {
+            throw new TypeError("fetch failed");
+          },
+          confirm: async () => false,
+        },
+      );
+      expect(result.exitCode).toBe(7);
+      expect(result.stderr).toBe(
+        "└  next  dotrelay run --profile relay -- sh -c 'echo it'\\''s up'\n",
+      );
+    } finally {
+      server.stop();
+      await state.cleanup();
+    }
+  });
+
   test("an offer is made once; a second failure of the same kind stops", async () => {
     const server = startServer([]);
     const state = await seedState(server.pin);
