@@ -133,6 +133,13 @@ import {
 } from "./repair";
 import type { TerminalIo } from "./terminal";
 import { confirmAction, rewriteRegion, selectOption } from "./ui";
+import {
+  settleWithin,
+  startUpdateCheck,
+  type UpdateDependencies,
+  updateCli,
+  updateNoticeAllowed,
+} from "./update";
 import { defaultOrigin, version } from "./version";
 import {
   approveDeviceEnrollment,
@@ -199,6 +206,8 @@ export type CliRuntime = Readonly<{
   readonly gitTrackingProbe?: GitTrackingProbe;
   /** Starts the command `dotrelay run` wraps; tests substitute their own. */
   readonly spawn?: ChildProcessRunner;
+  /** How `dotrelay update` finds and installs a release; tests substitute their own. */
+  readonly update?: UpdateDependencies;
   /**
    * Offer to fix a stopped command and carry on. Defaults to on only when
    * stdin, stdout and stderr are all terminals and CI is not set; --json
@@ -1536,6 +1545,7 @@ const renderEnvironmentList = (
 };
 
 const HUMAN_HEADING_COMMANDS = new Set([
+  "update",
   "setup",
   "login",
   "logout",
@@ -1590,6 +1600,17 @@ const execute = async (
         `DotRelay has no ${topic.join(" ")} command.\nUsage: dotrelay help [<command>]`,
       );
     return { value: { stdout: `${renderCommandHelp(label)}\n` } };
+  }
+  if (parsed.command === "update") {
+    const output = runtime.terminal?.output ?? process.stderr;
+    const result = await updateCli(version, {
+      ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
+      ...runtime.update,
+      ...(parsed.json
+        ? {}
+        : { progress: (step: string) => output.write(`${railText(step)}\n`) }),
+    });
+    return { value: result };
   }
   const catalogPath = runtime.profilePath ?? profileCatalogPath();
   // Keys and sessions live beside the catalog: restrict the directory and
@@ -3190,9 +3211,25 @@ const writeFully = (stream: NodeJS.WriteStream, text: string): Promise<void> =>
     stream.write(text, () => resolve());
   });
 
+// The newer version, when one is out, from the once-a-day background check.
+const updateNotice = (latest: string): string =>
+  `${markLine("warn", paint(`dotrelay ${latest} is out. You have ${version}.`, "warn"))}\n${epilogueNext("dotrelay update")}\n`;
+
 if (import.meta.main) {
+  const argv = Bun.argv.slice(2);
+  let updateCheck: Promise<string | null> | null = null;
+  if (updateNoticeAllowed(argv, process.env, process.stderr.isTTY === true)) {
+    try {
+      updateCheck = startUpdateCheck({
+        version,
+        stateDirectory: dirname(profileCatalogPath()),
+      });
+    } catch {
+      // No state directory: skip the check.
+    }
+  }
   const result = await run(
-    Bun.argv.slice(2),
+    argv,
     process.stdout.isTTY === undefined
       ? {}
       : { stdoutIsTerminal: process.stdout.isTTY },
@@ -3203,6 +3240,8 @@ if (import.meta.main) {
     if (clearDisplayed) await clearDisplayed().catch(() => {});
   }
   if (result.stderr) await writeFully(process.stderr, result.stderr);
+  const latest = updateCheck ? await settleWithin(updateCheck, 2_000) : null;
+  if (latest) await writeFully(process.stderr, updateNotice(latest));
   if (typeof process.stdin.setRawMode === "function")
     process.stdin.setRawMode(false);
   process.stdin.pause();
