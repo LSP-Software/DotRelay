@@ -3238,9 +3238,14 @@ export const run = async (
         ? presentation.detail
         : presentation.detail.slice(firstSentence?.[0].length ?? 0).trim();
     // The card's headline already says DotRelay can't see the repository.
-    const body = fullBody.startsWith(`${REPOSITORY_ACCESS_LEAD}\n`)
-      ? fullBody.slice(REPOSITORY_ACCESS_LEAD.length + 1)
-      : fullBody;
+    // presentationForError keeps that sentence as the whole detail and moves
+    // the numbered steps to fixes, so it is matched on its own.
+    const body =
+      fullBody.trim() === REPOSITORY_ACCESS_LEAD
+        ? ""
+        : fullBody.startsWith(`${REPOSITORY_ACCESS_LEAD}\n`)
+          ? fullBody.slice(REPOSITORY_ACCESS_LEAD.length + 1)
+          : fullBody;
     // Someone at a terminal gets the plain explanation; scripts and
     // --no-input keep the precise detail with its flags and file names.
     const plain = guided && guidance?.explain !== undefined && !debug;

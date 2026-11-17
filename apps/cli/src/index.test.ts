@@ -4751,8 +4751,13 @@ describe("actionable error categories at the process boundary", () => {
         expect(human.exitCode).toBe(6);
         // The card wraps long steps onto the rail; the words stay in order.
         const unwrapped = human.stderr.replace(/\n│ +/g, " ");
-        for (const line of (diagnostic.detail as string).split("\n"))
-          expect(unwrapped).toContain(line);
+        // JSON keeps the full detail; the card's headline already says what
+        // its opening sentence would, so the card shows the steps only.
+        const [lead, ...steps] = (diagnostic.detail as string).split("\n");
+        expect(lead).toBe("DotRelay can't access this GitHub repository.");
+        expect(unwrapped).toContain("DotRelay can't see this repository");
+        expect(unwrapped).not.toContain(lead);
+        for (const line of steps) expect(unwrapped).toContain(line);
         expect(human.stdout).toBe("");
         expect(result.stdout).toBe("");
       }
