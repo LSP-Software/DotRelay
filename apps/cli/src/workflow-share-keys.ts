@@ -83,7 +83,7 @@ export const parseMembers = (value: unknown): MemberEntry[] =>
 const invalidPlan = (): CliError =>
   new CliError(
     "transient",
-    "the server returned an invalid provisioning plan",
+    "the server returned an invalid key-sharing plan",
     {},
     "response_invalid",
   );
@@ -158,7 +158,7 @@ export const assertShareRecipients = (
   if (member && isBlockingStatus(member.status))
     throw new CliError(
       "crypto",
-      `this Member's account key changed. Compare their fingerprint (dotrelay team members --fingerprints) and run dotrelay team trust ${memberUserId} before sharing keys`,
+      `this member's account key has changed, so no keys were shared. Compare their fingerprint with them (dotrelay team members --fingerprints). If it matches, run dotrelay team trust ${memberUserId}.`,
       {},
       "trust_failed",
     );
@@ -167,7 +167,7 @@ export const assertShareRecipients = (
   if (!member || member.status !== "verified")
     throw new CliError(
       "conflict",
-      "this Member has no signed Device list yet. Ask them to unlock DotRelay on one of their Devices (dotrelay device recover, or the web app), then share the keys again",
+      "this member has no signed device list yet, so no keys were shared. Ask them to unlock DotRelay on one of their devices (dotrelay device recover, or the web app), then share the keys again.",
       {},
       "trust_failed",
     );
@@ -184,7 +184,7 @@ export const assertShareRecipients = (
     if (!decision.trusted)
       throw new CliError(
         "crypto",
-        "the server listed a Device that is not in this Member's signed Device list; no keys were shared",
+        "the server listed a device that isn't in this member's signed device list, so no keys were shared. Don't trust this server until you've checked it.",
         {},
         "trust_failed",
       );
@@ -220,11 +220,11 @@ const resolveTeamId = async (
   }
   if (teams.length === 0)
     throw new CliInvocationError(
-      "you are not an active Member of any Team on this Server Profile",
+      "you aren't an active member of any team on this server",
     );
   throw new CliInvocationError(
-    `you belong to several Teams; pass --team <team-id> (run dotrelay team list to see them):\n${teams
-      .map((team) => `${team.name} — ${team.id}`)
+    `you're in more than one team. Pass --team <team-id> to pick one (dotrelay team list shows them):\n${teams
+      .map((team) => `${team.name} (${team.id})`)
       .join("\n")}`,
   );
 };
@@ -269,10 +269,10 @@ export const findMember = async (
     if (member) return member;
   } else
     throw new CliInvocationError(
-      "name the Member by GitHub login or by the User id from dotrelay team members",
+      "name the member by their GitHub login, or by the user id that dotrelay team members shows",
     );
   throw new CliInvocationError(
-    `${JSON.stringify(reference.slice(0, 64))} is not a Member of this Team; invite them from the Members view of the DotRelay web app first, and share keys once they accept`,
+    `${JSON.stringify(reference.slice(0, 64))} isn't a member of this team. Invite them from the Members view in the DotRelay web app, then share keys once they accept.`,
   );
 };
 
@@ -282,7 +282,9 @@ export const shareProjectKeys = async (
 ): Promise<Record<string, unknown>> => {
   const reference = parsed.positionals[0];
   if (!reference)
-    throw new CliInvocationError("a GitHub login or User id is required");
+    throw new CliInvocationError(
+      "say who to share with: a GitHub login or a user id",
+    );
   const { deviceMetadataPath, readDeviceId } = await import("./device-storage");
   const deviceId =
     options.deviceId ??
@@ -292,14 +294,14 @@ export const shareProjectKeys = async (
   if (!deviceId)
     throw new CliError(
       "authentication",
-      "no Device is enrolled for this Server Profile; run dotrelay login or dotrelay device enroll",
+      "this machine isn't set up as a device on this server yet. Run dotrelay login or dotrelay device enroll.",
       {},
       "device_bundle_missing",
     );
   const admin = createDeviceAdmin(options, deviceId);
   const teamId = await resolveTeamId(options, parsed, admin);
   if (!UUID.test(teamId))
-    throw new CliInvocationError("the Team id is invalid");
+    throw new CliInvocationError("that team id isn't valid");
   const listed = await admin.get(`/api/v1/teams/${teamId}/memberships`, [
     "memberships",
     "invitations",
@@ -311,7 +313,7 @@ export const shareProjectKeys = async (
   );
   if (member.lifecycle === "REMOVED")
     throw new CliInvocationError(
-      "that Member was removed from the Team; invite them again first",
+      "that member was removed from the team. Invite them again first.",
     );
   const path = `/api/v1/teams/${teamId}/memberships/${member.membershipId}/provision`;
   const planResponse = await admin.get(path, [
@@ -336,7 +338,7 @@ export const shareProjectKeys = async (
   if (!boundary.session.active || !ownUserId)
     throw new CliError(
       "authentication",
-      "login is required for this Server Profile",
+      "you're not signed in to this server. Run dotrelay login.",
       {},
       "authentication_required",
     );
@@ -344,7 +346,7 @@ export const shareProjectKeys = async (
     options,
     boundary,
     deviceId,
-    "the local Device is not active on this Server Profile; run dotrelay device enroll or dotrelay device recover",
+    "this device isn't active on this server. Run dotrelay device enroll or dotrelay device recover.",
   );
   const accountMasterKey = await loadAccountMasterKey(options, deviceId).catch(
     () => null,
@@ -369,7 +371,7 @@ export const shareProjectKeys = async (
           ? null
           : (() => {
               try {
-                return fromBase64(roster, "Account roster");
+                return fromBase64(roster, "account device roster");
               } catch {
                 return new Uint8Array();
               }
@@ -388,9 +390,9 @@ export const shareProjectKeys = async (
   const fingerprint = memberTrust?.identity
     ? await accountFingerprint(memberTrust.identity)
     : null;
-  const question = `Share the keys for ${projectCount} Project${projectCount === 1 ? "" : "s"} with ${who} (${deviceCount} Device${deviceCount === 1 ? "" : "s"})?${
+  const question = `Share the keys for ${projectCount} project${projectCount === 1 ? "" : "s"} with ${who} (${deviceCount} device${deviceCount === 1 ? "" : "s"})?${
     fingerprint && !memberTrust?.confirmed
-      ? ` Their account fingerprint is ${fingerprint}; compare it with them first.`
+      ? ` Their account fingerprint is ${fingerprint}. Compare it with them first.`
       : ""
   }`;
   // Sharing with a Member this installation has not confirmed also confirms
@@ -401,7 +403,7 @@ export const shareProjectKeys = async (
     if (fingerprint === null)
       throw new CliError(
         "crypto",
-        "the Member's account identity is unavailable; no keys were shared",
+        "the server didn't send this member's account identity, so no keys were shared",
         {},
         "trust_failed",
       );
@@ -409,11 +411,13 @@ export const shareProjectKeys = async (
   }
   if (options.noInput && !options.force)
     throw new CliInvocationError(
-      "--no-input requires --force to confirm sharing the Project keys",
+      "with --no-input, add --force to confirm sharing the project keys",
     );
   if (!(options.noInput && options.force)) {
     if (!(await confirmPrompt(options, question)))
-      throw new CliInvocationError("sharing the Project keys was declined");
+      throw new CliInvocationError(
+        "you didn't confirm, so no keys were shared",
+      );
   }
   if (memberTrust && !memberTrust.confirmed && roster !== null)
     try {
@@ -423,14 +427,14 @@ export const shareProjectKeys = async (
           await confirmTeammateIdentity(resolution.pins, {
             serverProfileId: options.profile.pin.serverProfileId,
             userId: plan.userId,
-            roster: fromBase64(roster, "Account roster"),
+            roster: fromBase64(roster, "account device roster"),
           })
         ).pins,
       );
     } catch {
       throw new CliError(
         "crypto",
-        "the Member's signed Device list does not verify; no keys were shared",
+        "this member's signed device list doesn't verify, so no keys were shared. Don't trust this server until you've checked it.",
         {},
         "trust_failed",
       );
@@ -453,7 +457,7 @@ export const shareProjectKeys = async (
       )
         throw new CliError(
           "conflict",
-          "Project access changed while the keys were prepared; run the command again",
+          "project access changed while the keys were being prepared, so nothing was shared. Run the command again.",
           {},
           "state_conflict",
         );
@@ -461,7 +465,7 @@ export const shareProjectKeys = async (
       if (!key)
         throw new CliError(
           "incomplete-export",
-          `this Device cannot read Project ${project.id}, so it cannot share its key. Run dotrelay pull in that Project's repository on this Device, or share from a Device that can read every Project in the Team`,
+          `this device can't read project ${project.id}, so it can't share that project's key. Nothing was shared. Run dotrelay pull in that project's repository on this device, or share from a device that can read every project in the team.`,
           {},
           "project_key_unavailable",
         );
@@ -488,7 +492,7 @@ export const shareProjectKeys = async (
         typeof committed.lifecycle === "string" ? committed.lifecycle : null,
       projectCount,
       deviceCount,
-      message: `Shared the keys for ${projectCount} Project${projectCount === 1 ? "" : "s"} with ${who}. They can now run dotrelay pull.`,
+      message: `Shared the keys for ${projectCount} project${projectCount === 1 ? "" : "s"} with ${who}. They can run dotrelay pull now.`,
     };
   } finally {
     for (const key of projectKeys.values()) key.fill(0);

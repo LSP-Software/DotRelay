@@ -1,5 +1,5 @@
 import { bar, elapsed, stepDone, stepFail } from "./components";
-import { paint, terminalWidth, visibleWidth } from "./theme";
+import { paint, terminalWidth, truncate, visibleWidth } from "./theme";
 import { rewriteRegion } from "./ui";
 
 const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -47,7 +47,8 @@ export const createProgress = (options: ProgressOptions): Progress => {
 
   const draw = (): void => {
     const mark = paint(FRAMES[frame % FRAMES.length] ?? "⠋", "brand");
-    const head = `${mark}  ${label}`;
+    // The spinner line stays on one row so each redraw clears it exactly.
+    const head = `${mark}  ${truncate(label, Math.max(8, terminalWidth() - 4))}`;
     const time = elapsed(now() - startedAt);
     const gap = terminalWidth() - 2 - visibleWidth(head) - time.length;
     lines = rewriteRegion(

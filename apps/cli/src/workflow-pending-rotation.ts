@@ -76,7 +76,7 @@ export class PendingRotationExistsError extends CliError {
   constructor() {
     super(
       "conflict",
-      "another rotation of this project is in progress or has an unknown outcome on this device. Run dotrelay pull, then rotate again if you still need to",
+      "another rotation of this project is still running on this device, or the server never confirmed it. Run dotrelay pull, then rotate again if you still need to.",
       {},
       "epoch_rotation_uncertain",
     );
@@ -166,7 +166,7 @@ const readPendingRotation = async (
 };
 
 export const PENDING_ROTATION_NOTICE =
-  "An earlier project rotation's outcome is still unknown; its new key is kept sealed to this device. Run dotrelay pull again once the Server Profile can confirm it, before rotating again";
+  "The server hasn't confirmed an earlier rotation of this project. Its new key is kept sealed on this device. Before you rotate again, run dotrelay pull once the server can confirm it.";
 
 // A new rotation must not start while an earlier one may still commit: it
 // would overwrite or delete the only copy of that rotation's new key.
@@ -177,7 +177,7 @@ export const assertNoPendingRotation = async (
   if (await readPendingRotation(options, projectId))
     throw new CliError(
       "conflict",
-      "an earlier rotation of this project has an unknown outcome and its new key is kept on this device. Run dotrelay pull once the Server Profile is reachable, then rotate again if you still need to",
+      "the server hasn't confirmed an earlier rotation of this project, and its new key is kept on this device. Run dotrelay pull once the server is reachable, then rotate again if you still need to.",
       {},
       "epoch_rotation_uncertain",
     );
@@ -195,7 +195,7 @@ export type CancelRotation = (operationId: string) => Promise<boolean>;
 
 export class RotationOutcomeUnknownError extends Error {
   constructor() {
-    super("the rotation's outcome is unknown");
+    super("the server didn't confirm the rotation");
     this.name = "RotationOutcomeUnknownError";
   }
 }
@@ -275,7 +275,7 @@ export const resolvePendingRotation = async (
   }
   for (const encoded of input.boundary.epochKeyLinks) {
     try {
-      const bytes = fromBase64(encoded, "Project epoch key link");
+      const bytes = fromBase64(encoded, "project epoch key link");
       if (readProjectEpochKeyLinkEpochs(bytes)?.toEpoch !== pending.newEpoch)
         continue;
       await openProjectEpochKeyLink(bytes, {

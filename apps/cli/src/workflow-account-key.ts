@@ -101,7 +101,7 @@ export const fetchActiveWrappers = async (
   if (!Array.isArray(wrappers))
     throw new CliError(
       "transient",
-      "the Server Profile returned an invalid wrapper list",
+      "The server sent a list of account key wrappers this CLI can't read.",
       {},
       "response_invalid",
     );
@@ -281,7 +281,7 @@ export const createRecoveryCodeBackup = async (
   if (!accountMasterKey)
     throw new CliError(
       "authentication",
-      "this Device is not unlocked; run dotrelay device recover to unlock it",
+      "This device doesn't have your account key yet. Run dotrelay device recover.",
       {},
       "account_key_not_unlocked",
     );
@@ -290,7 +290,7 @@ export const createRecoveryCodeBackup = async (
   if (pending?.purpose === "setup")
     throw new CliError(
       "conflict",
-      "device setup has a recovery code waiting to be published; rerun dotrelay device setup before replacing it",
+      "A recovery code from dotrelay device setup hasn't reached the server yet. Run dotrelay device setup again to finish it before you replace the code.",
       {},
       "account_key_setup_pending",
     );
@@ -301,7 +301,7 @@ export const createRecoveryCodeBackup = async (
       } catch {
         throw new CliError(
           "transient",
-          "the replacement was not published, so the previous recovery code still works. Rerun dotrelay device backup to retry the same replacement.",
+          "The new recovery code didn't reach the server, so your old recovery code still works. Run dotrelay device backup again to retry with the same new code.",
           {},
           "recovery_code_not_published",
         );
@@ -312,7 +312,7 @@ export const createRecoveryCodeBackup = async (
       recoveryCode: pending.recoveryCode,
       wrapperId: pending.wrapperId,
       message:
-        "A new Recovery Code wrapper is active and the previous recovery code no longer works; the code is shown only once, so store it somewhere safe",
+        "Your new recovery code is active and the old one no longer works. This code is shown only once, so store it somewhere safe.",
     };
   }
   const recoveryCode = generateRecoveryCode();
@@ -339,7 +339,7 @@ export const createRecoveryCodeBackup = async (
   } catch {
     throw new CliError(
       "transient",
-      "the replacement was not published, so the previous recovery code still works. Rerun dotrelay device backup to retry the same replacement.",
+      "The new recovery code didn't reach the server, so your old recovery code still works. Run dotrelay device backup again to retry with the same new code.",
       {},
       "recovery_code_not_published",
     );
@@ -349,7 +349,7 @@ export const createRecoveryCodeBackup = async (
     recoveryCode: next.recoveryCode,
     wrapperId: next.wrapperId,
     message:
-      "A new Recovery Code wrapper is active and the previous recovery code no longer works; the code is shown only once, so store it somewhere safe",
+      "Your new recovery code is active and the old one no longer works. This code is shown only once, so store it somewhere safe.",
   };
 };
 
@@ -389,20 +389,20 @@ export const readRecoveryCode = async (
       if (code === "ENOENT")
         throw new CliError(
           "local-io",
-          `the recovery code file does not exist: ${path}`,
+          `There's no recovery code file at ${path}.`,
           {},
           "recovery_code_file_missing",
         );
       if (code === "EACCES")
         throw new CliError(
           "local-io",
-          `the recovery code file is not readable: ${path}`,
+          `You don't have permission to read the recovery code file at ${path}.`,
           {},
           "recovery_code_file_invalid",
         );
       throw new CliError(
         "local-io",
-        `--recovery-code-file must point to a regular, non-symlink file with mode 0600: ${path}`,
+        `The recovery code file must be a regular file with mode 0600, not a symlink: ${path}. If it's a regular file, run chmod 600 on it.`,
         {},
         "recovery_code_file_invalid",
       );
@@ -412,11 +412,11 @@ export const readRecoveryCode = async (
   if (options.noInput)
     throw new CliError(
       "invocation",
-      "--no-input reads no secret; pass --recovery-code-file <path> or pipe the code on stdin",
+      "With --no-input, the CLI can't ask for your recovery code. Pass --recovery-code-file <path>, or pipe the code on stdin.",
       {},
       "recovery_code_required",
     );
-  return await readTerminalSecret("Recovery Code", {
+  return await readTerminalSecret("Recovery code", {
     ...(options.terminal ? { terminal: options.terminal } : {}),
     ...(options.prompt ? { prompt: options.prompt } : {}),
   });
@@ -439,7 +439,7 @@ export const recoverAccountKey = async (
   const hasTransfer = input.transferId !== undefined;
   if (hasCodeFile && hasTransfer)
     throw new CliInvocationError(
-      "device recover accepts either --recovery-code-file <path> or --transfer <transfer-code>, not both",
+      "Use --recovery-code-file <path> or --transfer <transfer-code> with dotrelay device recover, not both.",
     );
   try {
     await enrollFirstDevice(options);
@@ -478,7 +478,7 @@ export const recoverAccountKey = async (
     if (!entry?.creatorPublicKey)
       throw new CliError(
         "authentication",
-        "Recovery Code authorization is unavailable; use an existing Device",
+        "Your account has no recovery code this machine can use. Send the account key from a device you already use with dotrelay device transfer.",
         {},
         "account_key_unlock_failed",
       );
@@ -489,7 +489,7 @@ export const recoverAccountKey = async (
     } catch {
       throw new CliError(
         "invocation",
-        "the recovery code is malformed; it is 13 groups of 4 Crockford characters",
+        "That isn't a valid recovery code. A recovery code is 13 groups of 4 letters and numbers.",
         {},
         "recovery_code_malformed",
       );
@@ -500,13 +500,13 @@ export const recoverAccountKey = async (
         pin: options.profile.pin,
         userId: session.user.id,
         recoveryCode: code,
-        wrapperBytes: fromBase64(entry.object, "recovery wrapper"),
+        wrapperBytes: fromBase64(entry.object, "recovery code wrapper"),
         creatorPublicKey: hexToBytes(entry.creatorPublicKey),
       });
     } catch {
       throw new CliError(
         "authentication",
-        "could not unlock the account with the recovery code; re-check the code and retry (older codes must first be rotated from an existing Device)",
+        "That recovery code didn't open your account key. Check the code and try again. If it's an older code, replace it first with dotrelay device backup on a device you already use.",
         {},
         "account_key_unlock_failed",
       );
@@ -533,7 +533,7 @@ export const recoverAccountKey = async (
       deviceId: prepared.bootstrap.deviceId,
       via: "recovery-code",
       message:
-        "Recovered this Device with the Recovery Code; the existing account key is unlocked",
+        "Recovered this device with your recovery code. It now holds your account key.",
     };
   }
   const authorized = await loadAuthorizedDevice(options);
@@ -548,7 +548,7 @@ export const recoverAccountKey = async (
     } catch {
       throw new CliError(
         "invocation",
-        "the recovery code is malformed; it is 13 groups of 4 Crockford characters",
+        "That isn't a valid recovery code. A recovery code is 13 groups of 4 letters and numbers.",
         {},
         "recovery_code_malformed",
       );
@@ -558,19 +558,19 @@ export const recoverAccountKey = async (
     if (!entry)
       throw new CliError(
         "conflict",
-        "the account has no active Recovery Code wrapper; create one with dotrelay device backup or the web app",
+        "Your account has no active recovery code. Create one with dotrelay device backup or in the web app.",
         {},
         "recovery_wrapper_missing",
       );
     let wrapper: ReturnType<typeof parseAccountKeyWrapper>;
     try {
       wrapper = parseAccountKeyWrapper(
-        fromBase64(entry.object, "recovery wrapper"),
+        fromBase64(entry.object, "recovery code wrapper"),
       );
     } catch {
       throw new CliError(
         "transient",
-        "the Server Profile returned an invalid recovery wrapper",
+        "The server sent a recovery code wrapper this CLI can't read.",
         {},
         "response_invalid",
       );
@@ -605,7 +605,7 @@ export const recoverAccountKey = async (
     } catch {
       throw new CliError(
         "authentication",
-        "could not unlock the account with the recovery code; re-check the code and retry",
+        "That recovery code didn't open your account key. Check the code and try again.",
         {},
         "account_key_unlock_failed",
       );
@@ -617,7 +617,7 @@ export const recoverAccountKey = async (
       code = parseAccountKeyTransferCode(input.transferId as string);
     } catch {
       throw new CliInvocationError(
-        "the transfer code is the value the sending Device printed: 32 hex digits, a dot, and the 40-digit account fingerprint",
+        "That isn't a valid transfer code. Use the code the sending device printed: 32 hex digits, a dot, then the 40-digit account fingerprint.",
       );
     }
     // Without a prompt only the code can carry the fingerprint, so a bare
@@ -625,7 +625,7 @@ export const recoverAccountKey = async (
     if (code.accountFingerprint === null && options.noInput)
       throw new CliError(
         "invocation",
-        "with --no-input, pass the whole transfer code the sending Device printed: it ends with the account fingerprint this Device checks",
+        "With --no-input, pass the whole transfer code the sending device printed. It ends with the account fingerprint this device checks.",
         {},
         "account_fingerprint_required",
       );
@@ -641,7 +641,7 @@ export const recoverAccountKey = async (
       if (error instanceof CliError && error.code === "state_conflict")
         throw new CliError(
           "conflict",
-          "the account key transfer is not pending or has expired; have the approving Device create a new transfer",
+          "This transfer isn't waiting anymore, or it expired. Run dotrelay device transfer again on the sending device.",
           {},
           "state_conflict",
         );
@@ -650,12 +650,12 @@ export const recoverAccountKey = async (
     let transfer: ReturnType<typeof parseAccountKeyTransfer>;
     try {
       transfer = parseAccountKeyTransfer(
-        fromBase64(result.object, "transfer object"),
+        fromBase64(result.object, "account key transfer"),
       );
     } catch {
       throw new CliError(
         "transient",
-        "the Server Profile returned an invalid account key transfer",
+        "The server sent an account key transfer this CLI can't read.",
         {},
         "response_invalid",
       );
@@ -692,7 +692,7 @@ export const recoverAccountKey = async (
           nowMs: Date.now(),
           roster:
             typeof servedRoster === "string"
-              ? fromBase64(servedRoster, "Account Device roster")
+              ? fromBase64(servedRoster, "account device roster")
               : null,
           expectedIdentity: pinnedIdentity,
         },
@@ -700,7 +700,7 @@ export const recoverAccountKey = async (
     } catch {
       throw new CliError(
         "crypto",
-        "could not open the account key transfer for this Device. The sending Device must list this Device in the account's signed Device list; run dotrelay device transfer on it again",
+        "This device couldn't open the transfer. The sending device has to list this device in your signed device roster. Run dotrelay device transfer on the sending device again.",
         {},
         "account_key_transfer_invalid",
       );
@@ -715,7 +715,7 @@ export const recoverAccountKey = async (
         refuse(
           new CliError(
             "crypto",
-            "the account key in this transfer does not match the account fingerprint in the transfer code. Do not trust this Server Profile until you have checked it",
+            "The account key in this transfer doesn't match the fingerprint in the transfer code. Nothing was saved. Don't trust this server until you've checked it.",
             {},
             "account_fingerprint_mismatch",
           ),
@@ -723,10 +723,12 @@ export const recoverAccountKey = async (
     } else if (
       !(await confirmPrompt(
         options,
-        `The transfer carries the account key with fingerprint ${fingerprint}. Does it match the account fingerprint the sending Device shows?`,
+        `This transfer carries the account key with fingerprint ${fingerprint}. Does that match the account fingerprint on the sending device?`,
       ).catch((error: unknown) => refuse(error as Error)))
     )
-      refuse(new CliInvocationError("the account key transfer was declined"));
+      refuse(
+        new CliInvocationError("You declined the transfer. Nothing was saved."),
+      );
     accountMasterKey = opened.accountMasterKey;
     via = "transfer";
   }
@@ -756,8 +758,8 @@ export const recoverAccountKey = async (
     via,
     message:
       via === "recovery-code"
-        ? "unlocked with the recovery code; the Account Master Key is now stored on this Device"
-        : "unlocked by the trusted Device transfer; the Account Master Key is now stored on this Device",
+        ? "Opened your account key with the recovery code. This device now stores it."
+        : "Received your account key from your other device. This device now stores it.",
   };
 };
 
@@ -794,7 +796,7 @@ export const setupDeviceAccountKey = async (
     if (!existing)
       throw new CliError(
         "local-io",
-        "a recovery code is waiting on this device, but its Account Master Key is not saved. The account is not recoverable from this device.",
+        "A recovery code is waiting on this device, but the account key it protects isn't saved here. The account can't be recovered from this device.",
         {},
         "account_key_not_saved",
       );
@@ -807,14 +809,14 @@ export const setupDeviceAccountKey = async (
           await clearPresentedRecoveryCode(options, authorized.deviceId);
           throw new CliError(
             "conflict",
-            "this account already has an Account Master Key; this Device discarded its candidate. Run dotrelay device recover to take over the established key",
+            "Your account already has an account key, so this device threw away the one it made. Run dotrelay device recover to get the existing key.",
             {},
             "account_key_already_exists",
           );
         }
         throw new CliError(
           "transient",
-          "the recovery code is saved on this device, but the server does not have it yet. Rerun dotrelay device setup to retry the same key. The account is not recoverable from another device until that succeeds.",
+          "The recovery code is saved on this device, but the server doesn't have it yet. Run dotrelay device setup again to retry with the same key. Until that works, the account can't be recovered from another device.",
           {},
           "recovery_code_not_published",
         );
@@ -826,13 +828,13 @@ export const setupDeviceAccountKey = async (
       recoveryCode: pending.recoveryCode,
       wrapperId: pending.wrapperId,
       message:
-        "the Account Master Key is set up on this Device; the Recovery Code is shown only once, so store it somewhere safe",
+        "Your account key is set up on this device. Your recovery code is shown only once, so store it somewhere safe.",
     };
   }
   if (!existing && wrappers.length > 0)
     throw new CliError(
       "conflict",
-      "this account already has an Account Master Key; run dotrelay device recover to take it over from an existing Device",
+      "Your account already has an account key. Run dotrelay device recover to get it from a device you already use.",
       {},
       "account_key_already_exists",
     );
@@ -840,7 +842,7 @@ export const setupDeviceAccountKey = async (
     return {
       deviceId: authorized.deviceId,
       message:
-        "this Device already holds the Account Master Key; nothing to set up",
+        "This device already holds your account key, and your account has a recovery code. Nothing to set up.",
     };
   const accountMasterKey = existing ?? generateAccountMasterKey();
   const recoveryCode = generateRecoveryCode();
@@ -871,14 +873,14 @@ export const setupDeviceAccountKey = async (
       await clearPresentedRecoveryCode(options, authorized.deviceId);
       throw new CliError(
         "conflict",
-        "this account already has an Account Master Key; this Device discarded its candidate. Run dotrelay device recover to take over the established key",
+        "Your account already has an account key, so this device threw away the one it made. Run dotrelay device recover to get the existing key.",
         {},
         "account_key_already_exists",
       );
     }
     throw new CliError(
       "transient",
-      "the recovery code is saved on this device, but the server does not have it yet. Rerun dotrelay device setup to retry the same key. The account is not recoverable from another device until that succeeds.",
+      "The recovery code is saved on this device, but the server doesn't have it yet. Run dotrelay device setup again to retry with the same key. Until that works, the account can't be recovered from another device.",
       {},
       "recovery_code_not_published",
     );
@@ -889,7 +891,7 @@ export const setupDeviceAccountKey = async (
     recoveryCode: next.recoveryCode,
     wrapperId: next.wrapperId,
     message:
-      "the Account Master Key is set up on this Device; the Recovery Code is shown only once, so store it somewhere safe",
+      "Your account key is set up on this device. Your recovery code is shown only once, so store it somewhere safe.",
   };
 };
 
@@ -915,7 +917,7 @@ export const transferAccountKey = async (
   if (!accountMasterKey)
     throw new CliError(
       "authentication",
-      "this Device is not unlocked; run dotrelay device setup or dotrelay device recover first",
+      "This device doesn't have your account key, so it can't send it. Run dotrelay device setup or dotrelay device recover first.",
       {},
       "account_key_not_unlocked",
     );
@@ -948,7 +950,7 @@ export const transferAccountKey = async (
     if (own?.status !== "verified" || !own.roster)
       throw new CliError(
         "crypto",
-        "this account's signed Device list could not be verified, so the account key cannot be sent. Run dotrelay pull, then try again",
+        "Couldn't verify your signed device roster, so the account key wasn't sent. Run dotrelay pull, then try again.",
         {},
         "account_roster_untrusted",
       );
@@ -960,12 +962,12 @@ export const transferAccountKey = async (
   if (!recipient) {
     if (options.noInput)
       throw new CliInvocationError(
-        "device transfer requires --to <peer-device-id> with --no-input",
+        "With --no-input, pass --to <peer-device-id> to say which device gets the account key.",
       );
     if (reported.length === 0)
       throw new CliError(
         "conflict",
-        "this account has no other active Device to receive the key",
+        "Your account has no other active device to send the key to.",
         {},
         "transfer_recipient_unknown",
       );
@@ -983,8 +985,8 @@ export const transferAccountKey = async (
                 listed.deviceId === device.id.toLowerCase() &&
                 listed.revokedAtMs === undefined,
             )
-              ? "in your signed Device list"
-              : "not in your signed Device list yet",
+              ? "in your signed device roster"
+              : "not in your signed device roster yet",
             ...(device.hasEpochGrant ? ["holds the project key"] : []),
           ].join(" · "),
         })),
@@ -1007,7 +1009,7 @@ export const transferAccountKey = async (
     if (trusted.roster.devices.some((device) => device.deviceId === recipient))
       throw new CliError(
         "conflict",
-        `device ${recipient} is revoked in this account's signed Device list`,
+        `Device ${recipient} is revoked in your signed device roster, so it can't get the account key.`,
         {},
         "transfer_recipient_unknown",
       );
@@ -1019,7 +1021,7 @@ export const transferAccountKey = async (
     if (!peer)
       throw new CliError(
         "conflict",
-        `device ${recipient} is not an active Device for this account`,
+        `Device ${recipient} isn't an active device on your account.`,
         {},
         "transfer_recipient_unknown",
       );
@@ -1044,7 +1046,7 @@ export const transferAccountKey = async (
     } catch {
       throw new CliError(
         "transient",
-        "the Server Profile returned an invalid peer Device key",
+        "The server sent an invalid key for that device. The account key wasn't sent.",
         {},
         "response_invalid",
       );
@@ -1053,17 +1055,19 @@ export const transferAccountKey = async (
     if (options.noInput)
       throw new CliError(
         "conflict",
-        `device ${recipient} is not in your signed Device list yet. Run dotrelay device transfer without --no-input to compare its key fingerprint, or approve its enrollment from this Device`,
+        `Device ${recipient} isn't in your signed device roster yet. Run dotrelay device transfer without --no-input to compare its key fingerprint, or approve its enrollment from this device.`,
         {},
         "transfer_recipient_unverified",
       );
     if (
       !(await confirmPrompt(
         options,
-        `Device ${recipient} is not in your signed Device list yet. The Server Profile reports its key fingerprint as ${fingerprint}; dotrelay device list on that Device shows its own. If they match, add it to your Device list and send it the account key?`,
+        `Device ${recipient} isn't in your signed device roster yet. The server reports its key fingerprint as ${fingerprint}. Run dotrelay device list on that device to see its own. If they match, add it to your roster and send it the account key?`,
       ))
     )
-      throw new CliInvocationError("the account key transfer was declined");
+      throw new CliInvocationError(
+        "You declined. The account key wasn't sent.",
+      );
     const extended = rosterOf(await establish([candidate]));
     listed = extended.roster.devices.find(
       (device) =>
@@ -1072,7 +1076,7 @@ export const transferAccountKey = async (
     if (!listed)
       throw new CliError(
         "transient",
-        "the Device could not be added to your signed Device list; try again",
+        "Couldn't add the device to your signed device roster. Try again.",
         {},
         "account_roster_untrusted",
       );
@@ -1125,7 +1129,7 @@ export const transferAccountKey = async (
     accountFingerprint: fingerprint,
     recipientDeviceId: listed.deviceId,
     expiresAt: new Date(expiresAtMs).toISOString(),
-    message: `the Account Master Key is sealed for the receiving Device; run dotrelay device recover --transfer ${transferCode} on that Device before it expires. The code ends with this account's fingerprint, which that Device checks`,
+    message: `Sealed your account key for the other device. On that device, run dotrelay device recover --transfer ${transferCode} before the code expires. The code ends with your account fingerprint, which that device checks.`,
   };
 };
 
@@ -1145,7 +1149,7 @@ export const revokeAccountKeyWrapper = async (
   if (!id) {
     if (options.noInput)
       throw new CliInvocationError(
-        "device revoke-wrapper requires --wrapper-id <id> with --no-input",
+        "With --no-input, pass --wrapper-id <id> to say which wrapper to revoke.",
       );
     const active = await fetchActiveWrappers(authorized.admin);
     // The service keeps at least one Recovery Code wrapper and at least one
@@ -1162,7 +1166,7 @@ export const revokeAccountKeyWrapper = async (
     if (revocable.length === 0)
       throw new CliError(
         "conflict",
-        "this account must keep at least one Recovery Code wrapper and one wrapper of any kind active; there is no wrapper to revoke",
+        "There's no wrapper you can revoke. Your account has to keep at least one recovery code wrapper and at least one wrapper of any kind active.",
         {},
         "state_conflict",
       );
@@ -1173,9 +1177,9 @@ export const revokeAccountKeyWrapper = async (
         label: wrapper.wrapperId,
         detail:
           wrapper.type === "recovery-code"
-            ? "Recovery Code wrapper"
+            ? "Recovery code wrapper"
             : wrapper.type === "password"
-              ? "Password wrapper"
+              ? "Encryption password wrapper"
               : "Passkey wrapper",
       })),
       {
@@ -1203,7 +1207,7 @@ export const revokeAccountKeyWrapper = async (
     revoked: Boolean(result.revoked),
     idempotent: Boolean(result.idempotent),
     message: result.idempotent
-      ? "the Recovery Code wrapper was already revoked"
-      : "the Recovery Code wrapper is retired and can no longer unlock the account",
+      ? "That wrapper was already revoked."
+      : "Revoked the wrapper. It can't unlock your account key anymore.",
   };
 };

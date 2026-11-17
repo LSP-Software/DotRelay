@@ -79,7 +79,7 @@ export const createSessionStore = (credentials: CredentialStore) =>
       if (token.length === 0)
         throw new CliError(
           "authentication",
-          "the server returned an empty session",
+          "The server sent back an empty session. Run dotrelay login to try again.",
           {},
           "session_invalid",
         );
@@ -98,7 +98,7 @@ const readObject = (value: unknown): Record<string, unknown> => {
   if (value === null || typeof value !== "object" || Array.isArray(value))
     throw new CliError(
       "authentication",
-      "the server returned an invalid device authorization response",
+      "The server sent a sign-in response this CLI can't read. Run dotrelay login to try again.",
       {},
       "auth_response_invalid",
     );
@@ -115,7 +115,7 @@ const stringField = (
   if (typeof value !== "string" || value.length === 0)
     throw new CliError(
       "authentication",
-      "the server returned an invalid device authorization response",
+      "The server sent a sign-in response this CLI can't read. Run dotrelay login to try again.",
       {},
       "auth_response_invalid",
     );
@@ -134,7 +134,7 @@ const numberField = (
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1)
     throw new CliError(
       "authentication",
-      "the server returned an invalid polling interval",
+      "The server sent a sign-in polling interval this CLI can't use. Run dotrelay login to try again.",
       {},
       "auth_response_invalid",
     );
@@ -152,7 +152,7 @@ const userCodeField = (object: Record<string, unknown>): string => {
   if (!USER_CODE.test(value))
     throw new CliError(
       "authentication",
-      "the server returned an invalid device authorization response",
+      "The server sent a sign-in response this CLI can't read. Run dotrelay login to try again.",
       {},
       "auth_response_invalid",
     );
@@ -192,7 +192,7 @@ const requireProfileUrl = (value: string, profile: ServerProfilePin): URL => {
   } catch {
     throw new CliError(
       "authentication",
-      "the server returned an invalid verification URL",
+      "The server sent a sign-in link that isn't a valid URL. Run dotrelay login to try again.",
       {},
       "auth_response_invalid",
     );
@@ -200,7 +200,7 @@ const requireProfileUrl = (value: string, profile: ServerProfilePin): URL => {
   if (url.origin !== profile.origin || url.username || url.password)
     throw new CliError(
       "authentication",
-      "the verification URL does not belong to the Server Profile",
+      "The server sent a sign-in link for a different site, so the CLI didn't show or open it. Check that this server profile points at the server you expect.",
       {},
       "auth_response_invalid",
     );
@@ -213,7 +213,7 @@ const parseResponseBody = async (response: Response): Promise<unknown> => {
   } catch {
     throw new CliError(
       "authentication",
-      "the server returned invalid JSON",
+      "The server's sign-in response wasn't valid JSON. Run dotrelay login to try again.",
       {},
       "auth_response_invalid",
     );
@@ -258,14 +258,14 @@ const requestDeviceCode = async (
     if (!(error instanceof NetworkAttemptError)) throw error;
     throw networkFailureCliError(
       error,
-      `the device authorization endpoint at ${origin}`,
+      `the server at ${origin}`,
       "device_authorization_unavailable",
     );
   }
   if (!response.ok)
     throw new CliError(
       "authentication",
-      "the server could not start device authorization",
+      "The server couldn't start a sign-in. Run dotrelay login to try again.",
       {},
       "device_authorization_failed",
     );
@@ -342,7 +342,7 @@ export const loginWithDeviceAuthorization = async (
   const deviceAuthorizationTimeout = (): CliError =>
     new CliError(
       "authentication",
-      "device authorization timed out",
+      "Sign-in timed out before the code was approved in the browser. Run dotrelay login to get a new code.",
       {},
       "device_authorization_timeout",
     );
@@ -459,14 +459,14 @@ export const loginWithDeviceAuthorization = async (
     if (error === "expired_token")
       throw new CliError(
         "authentication",
-        "device authorization expired",
+        "The sign-in code expired. Run dotrelay login to get a new one.",
         {},
         "device_authorization_expired",
       );
     if (error === "access_denied")
       throw new CliError(
         "authentication",
-        "device authorization was denied",
+        "The sign-in was denied in the browser. Run dotrelay login to try again.",
         {},
         "device_authorization_denied",
       );
@@ -485,7 +485,7 @@ export const loginWithDeviceAuthorization = async (
     }
     throw new CliError(
       "authentication",
-      "device authorization failed",
+      "The server didn't approve the sign-in. Run dotrelay login to try again.",
       {},
       "device_authorization_failed",
     );
@@ -506,7 +506,7 @@ export const browserOpenFailure = (detail: string): CliError =>
   new CliError("local-io", detail, {}, "browser_open_failed");
 
 const BROWSER_OPEN_FAILED_DETAIL =
-  "could not open the verification page in a browser; open the URL shown above";
+  "Couldn't open a browser. Open the link shown above yourself.";
 
 export type VerificationPageProcess = Readonly<{
   readonly exited: Promise<number>;

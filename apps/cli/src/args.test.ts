@@ -106,7 +106,7 @@ describe("CLI argument contract", () => {
       ]),
     ).toThrow("--variable");
     expect(() => parseArguments(["rollback", "--no-input"])).toThrow(
-      "the rollback command takes exactly one positional argument",
+      "dotrelay rollback needs the revision to roll back to.",
     );
   });
 
@@ -143,7 +143,7 @@ describe("CLI argument contract", () => {
     // path of the 0600 file that holds the code.
     expect(() =>
       parseArguments(["device", "recover", "--recovery-code", "CODE"]),
-    ).toThrow("unknown option: --recovery-code");
+    ).toThrow("DotRelay has no --recovery-code option.");
     expect(parseArguments(["device", "transfer"])).toMatchObject({
       command: "device",
       subcommand: "transfer",
@@ -231,38 +231,38 @@ describe("CLI argument contract", () => {
     expect(parseArguments(["diff", "--reveal"]).reveal).toBe(true);
     expect(() => parseArguments(["status", "--reveal"])).toThrow("--reveal");
     expect(() => parseArguments(["diff", "extra"])).toThrow(
-      "the diff command takes no positional arguments but received 1; use --environment extra instead; usage: dotrelay diff",
+      "dotrelay diff doesn't take the argument extra. To choose an environment, use --environment extra.\nUsage: dotrelay diff",
     );
   });
 
   test("rejects unexpected positionals with a correction and usage", () => {
     expect(() => parseArguments(["pull", "production"])).toThrow(
-      "the pull command takes no positional arguments but received 1; use --environment production instead; usage: dotrelay pull",
+      "dotrelay pull doesn't take the argument production. To choose an environment, use --environment production.\nUsage: dotrelay pull",
     );
     expect(() => parseArguments(["pull", "a", "b"])).toThrow(
-      "the pull command takes no positional arguments but received 2; usage: dotrelay pull",
+      "dotrelay pull doesn't take the arguments a b.\nUsage: dotrelay pull",
     );
     expect(() => parseArguments(["push", "extra"])).toThrow(
-      "usage: dotrelay push",
+      "Usage: dotrelay push",
     );
     expect(() => parseArguments(["login", "extra"])).toThrow(
-      "usage: dotrelay login",
+      "Usage: dotrelay login",
     );
     expect(() => parseArguments(["logout", "extra"])).toThrow(
-      "usage: dotrelay logout",
+      "Usage: dotrelay logout",
     );
     expect(() => parseArguments(["status", "extra"])).toThrow(
-      "usage: dotrelay status",
+      "Usage: dotrelay status",
     );
     expect(() => parseArguments(["context", "extra"])).toThrow(
-      "usage: dotrelay context",
+      "Usage: dotrelay context",
     );
     expect(() => parseArguments(["history", "extra"])).toThrow(
-      "usage: dotrelay history",
+      "Usage: dotrelay history",
     );
     expect(() =>
       parseArguments(["setup", "https://a.example", "https://b.example"]),
-    ).toThrow("usage: dotrelay setup <origin>");
+    ).toThrow("Usage: dotrelay setup <origin>");
     expect(() =>
       parseArguments([
         "rollback",
@@ -271,17 +271,17 @@ describe("CLI argument contract", () => {
         "--variable",
         "33333333-3333-4333-8333-333333333333",
       ]),
-    ).toThrow("usage: dotrelay rollback");
+    ).toThrow("Usage: dotrelay rollback");
   });
 
   test("rejects mutually exclusive pull output combinations", () => {
     expect(() =>
       parseArguments(["pull", "--stdout", "--output", ".env"]),
     ).toThrow(
-      "pull --stdout and --output are mutually exclusive; use either `dotrelay pull --stdout` or `dotrelay pull --output <file>`",
+      "Use --stdout to print the values or --output <file> to write them to a file, not both.",
     );
     expect(() => parseArguments(["pull", "--stdout", "--json"])).toThrow(
-      "pull --stdout and --json are mutually exclusive",
+      "--stdout doesn't work with --json",
     );
     expect(parseArguments(["pull", "--output", ".env", "--json"]).json).toBe(
       true,
@@ -295,32 +295,32 @@ describe("CLI argument contract", () => {
     expect(() => parseArguments(["pull", "--name", "app"])).toThrow("--name");
     expect(() => parseArguments(["status", "--name", "app"])).toThrow("--name");
     expect(() => parseArguments(["status", "--limit", "5"])).toThrow(
-      "--limit is not supported by status",
+      "--limit doesn\'t work with dotrelay status",
     );
     expect(() => parseArguments(["status", "--no-open"])).toThrow("--no-open");
     expect(() => parseArguments(["login", "--environment", "prod"])).toThrow(
-      "--environment is not supported by login",
+      "--environment doesn\'t work with dotrelay login",
     );
     expect(() => parseArguments(["logout", "--no-input"])).toThrow(
       "--no-input",
     );
     expect(() =>
       parseArguments(["setup", "https://relay.example", "--profile", "relay"]),
-    ).toThrow("--profile is not supported by setup");
+    ).toThrow("--profile doesn\'t work with dotrelay setup");
     expect(() => parseArguments(["help", "--json"])).toThrow("--json");
     expect(() => parseArguments(["device", "backup", "--from", "kit"])).toThrow(
-      "--from is not supported by device backup",
+      "--from doesn\'t work with dotrelay device backup",
     );
     expect(parseArguments(["history", "--limit", "25"]).limit).toBe(25);
     expect(parseArguments(["pull", "--limit", "25"]).limit).toBe(25);
     expect(() => parseArguments(["status", "--limit", "999"])).toThrow(
-      "--limit is not supported by status",
+      "--limit doesn\'t work with dotrelay status",
     );
     expect(() => parseArguments(["history", "--limit", "0"])).toThrow(
-      "--limit must be an integer from 1 to 256",
+      "--limit must be a whole number from 1 to 256",
     );
     expect(() => parseArguments(["history", "--limit", "257"])).toThrow(
-      "--limit must be an integer from 1 to 256",
+      "--limit must be a whole number from 1 to 256",
     );
   });
 
@@ -335,7 +335,7 @@ describe("CLI argument contract", () => {
       "--output needs a value",
     );
     expect(() => parseArguments(["pull", "--profile", "--reveal"])).toThrow(
-      "usage: dotrelay pull",
+      "Usage: dotrelay pull",
     );
     expect(() => parseArguments(["pull", "--profile="])).toThrow(
       "--profile needs a value",
@@ -432,26 +432,26 @@ describe("CLI argument contract", () => {
     );
     expect(() => parseArguments(["pull", "-o"])).toThrow("-o needs a value");
     expect(() => parseArguments(["status", "-o", "x"])).toThrow(
-      "--output is not supported by status",
+      "--output doesn\'t work with dotrelay status",
     );
   });
 
   test("names an unknown short option instead of treating it as a command", () => {
     expect(() => parseArguments(["pull", "-x"])).toThrow(
-      "unknown option: -x; options use two dashes",
+      "DotRelay has no -x option. Options start with two dashes",
     );
-    expect(() => parseArguments(["-x"])).toThrow("unknown option: -x");
+    expect(() => parseArguments(["-x"])).toThrow("DotRelay has no -x option.");
   });
 
   test("never starts an error with the operator's own input", () => {
     expect(() => parseArguments(["bogus"])).toThrow(
-      "unknown command: bogus; run dotrelay help",
+      "DotRelay has no bogus command. Run dotrelay help",
     );
     expect(() => parseArguments(["pull", "extra"])).toThrow(
-      /^the pull command takes/,
+      /^dotrelay pull doesn't take/,
     );
     expect(() => parseArguments(["env"])).toThrow(
-      "the env command needs a subcommand: list, use, create",
+      "dotrelay env needs a subcommand: list, use, create.",
     );
   });
 
@@ -461,10 +461,10 @@ describe("CLI argument contract", () => {
       "staging",
     ]);
     expect(() => parseArguments(["env", "create"])).toThrow(
-      "usage: dotrelay env create <label>",
+      "Usage: dotrelay env create <label>",
     );
     expect(() => parseArguments(["env", "list", "extra"])).toThrow(
-      "usage: dotrelay env list",
+      "Usage: dotrelay env list",
     );
     expect(parseArguments(["team", "list", "--json"]).json).toBe(true);
     expect(
@@ -472,7 +472,7 @@ describe("CLI argument contract", () => {
         .positionals,
     ).toEqual(["octocat"]);
     expect(() => parseArguments(["team", "share-keys"])).toThrow(
-      "usage: dotrelay team share-keys <github-login-or-user-id>",
+      "Usage: dotrelay team share-keys <github-login-or-user-id>",
     );
     // --fingerprint takes the 40 hex digits as shown, spaces allowed, and is
     // read only by the commands that confirm an identity.
@@ -495,17 +495,17 @@ describe("CLI argument contract", () => {
     ).toBe("ab".repeat(20));
     expect(() =>
       parseArguments(["team", "trust", "user", "--fingerprint", "abc"]),
-    ).toThrow("--fingerprint requires the 40 hex digits");
+    ).toThrow("--fingerprint takes the 40 hex digits");
     expect(() =>
       parseArguments(["pull", "--fingerprint", "ab".repeat(20)]),
-    ).toThrow("--fingerprint is not supported by pull");
+    ).toThrow("--fingerprint doesn\'t work with dotrelay pull");
     expect(parseArguments(["device", "list"]).subcommand).toBe("list");
     expect(
       parseArguments(["team", "decline", "Payments", "--no-input", "--force"])
         .positionals,
     ).toEqual(["Payments"]);
     expect(() => parseArguments(["team", "decline"])).toThrow(
-      "usage: dotrelay team decline <invitation-id-or-team>",
+      "Usage: dotrelay team decline <invitation-id-or-team>",
     );
     expect(() =>
       parseArguments(["team", "decline", "Payments", "--team", "t"]),
@@ -533,20 +533,20 @@ describe("CLI argument contract", () => {
       "--insecure",
     ]);
     expect(() => parseArguments(["run", "node", "server.js"])).toThrow(
-      "put the command to run after --",
+      "Put the command to start after --",
     );
     expect(() => parseArguments(["run"])).toThrow(
-      "the run command needs the command to start after --",
+      "Put the command to start after --",
     );
     expect(() => parseArguments(["run", "--json", "--", "x"])).toThrow(
-      "--json is not supported by run",
+      "--json doesn\'t work with dotrelay run",
     );
     // The child's own flags are never DotRelay's forbidden flags.
     expect(() =>
       rejectForbiddenFlags(["run", "--", "curl", "--insecure"]),
     ).not.toThrow();
     expect(() => rejectForbiddenFlags(["pull", "--insecure"])).toThrow(
-      "--insecure is not supported",
+      "DotRelay doesn't accept --insecure",
     );
     expect(ownArguments(["run", "-p", "--", "--help"])).toEqual(["run", "-p"]);
   });
@@ -571,9 +571,9 @@ describe("CLI argument contract", () => {
     );
     expect(() =>
       parseArguments(["run", "--allow-env", "NOT-A-NAME", "--", "x"]),
-    ).toThrow("--allow-env requires a Variable name");
+    ).toThrow("--allow-env takes a variable name");
     expect(() => parseArguments(["pull", "--allow-env", "PATH"])).toThrow(
-      "--allow-env is not supported by pull",
+      "--allow-env doesn\'t work with dotrelay pull",
     );
   });
 
@@ -583,10 +583,10 @@ describe("CLI argument contract", () => {
       "shell",
     );
     expect(() => parseArguments(["export", "--format", "yaml"])).toThrow(
-      "--format must be one of: dotenv, json, shell",
+      "--format must be dotenv, json or shell.",
     );
     expect(() => parseArguments(["pull", "--format", "json"])).toThrow(
-      "--format is not supported by pull",
+      "--format doesn\'t work with dotrelay pull",
     );
   });
 });

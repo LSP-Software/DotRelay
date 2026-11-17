@@ -63,7 +63,7 @@ export const planEpochRotation = (
   )
     throw new CliError(
       "conflict",
-      "this project has no active environment to rotate from. Activate an environment, or switch to one, before rotating the project's keys",
+      "this project has no active environment to rotate from. Activate one or switch to one, then try again.",
       { activeEnvironments: active.length },
       "epoch_rotation_unsupported",
     );
@@ -73,7 +73,7 @@ export const planEpochRotation = (
   if (empty)
     throw new CliError(
       "conflict",
-      `the active environment ${empty.label} has no revision yet. Run dotrelay init in it before rotating the project's keys`,
+      `the environment ${empty.label} has no revisions yet. Run dotrelay init in it before you rotate the project's keys.`,
       { environmentId: empty.id },
       "environment_empty",
     );
@@ -119,7 +119,7 @@ export const rotationTransportFailure = (error: unknown): CliError => {
   return new CliError(
     categoryForProblem(code),
     code === "stale_epoch"
-      ? "the project epoch changed before this rotation landed. Run dotrelay pull, then try again"
+      ? "the project's keys changed before this rotation reached the server. Run dotrelay pull, then try again."
       : detailForProblem(code),
     {},
     code,
@@ -140,7 +140,7 @@ export const rotateProjectEpoch = async (
 > => {
   if (options.noInput && !options.force)
     throw new CliInvocationError(
-      "project rotate changes the project's keys; re-run with --force to confirm",
+      "project rotate replaces the project's keys. Run it again with --force to confirm.",
     );
   // Verify the session, Device, and project context before asking for the
   // destructive confirmation, so a missing login or enrollment is reported
@@ -153,7 +153,9 @@ export const rotateProjectEpoch = async (
     synced.workflow.publicationContext.projectId,
   );
   if (!options.noInput && !(await confirmSilent(options, ROTATE_QUESTION)))
-    throw new CliInvocationError("project key rotation was declined");
+    throw new CliInvocationError(
+      "you didn't confirm, so the project's keys weren't rotated",
+    );
   const context = synced.workflow.publicationContext;
   const admin = createDeviceAdmin(options, synced.workflow.deviceId);
   const environments = await listEnvironments(admin, context.projectId);
@@ -169,7 +171,7 @@ export const rotateProjectEpoch = async (
   if (!previousEpochKey || context.projectEpoch !== previousEpoch)
     throw new CliError(
       "conflict",
-      "this device does not hold the project's current key, so it cannot link the new key to it. Run dotrelay pull, then try again",
+      "this device doesn't have the project's current key, so it can't link the new key to it. Run dotrelay pull, then try again.",
       {},
       "epoch_key_unavailable",
     );
@@ -194,7 +196,7 @@ export const rotateProjectEpoch = async (
   if (!encryptionPublicKey)
     throw new CliError(
       "crypto",
-      "this device has no encryption key to keep the new project key safe during the rotation",
+      "this device has no encryption key to protect the new project key during the rotation. Nothing was sent.",
       {},
       "epoch_key_unavailable",
     );
@@ -265,7 +267,7 @@ export const rotateProjectEpoch = async (
     if (error instanceof RotationOutcomeUnknownError)
       throw new CliError(
         "transient",
-        "the rotation's outcome is unknown. Its new project key is kept sealed to this device: run dotrelay pull once the Server Profile is reachable to finish it. Do not run project rotate again before that",
+        "the server didn't confirm the rotation, so it may or may not have gone through. The new project key is kept sealed on this device. Don't run project rotate again yet. Run dotrelay pull once the server is reachable to finish it.",
         {},
         "epoch_rotation_uncertain",
       );
@@ -290,8 +292,8 @@ export const rotateProjectEpoch = async (
     environmentIds,
     message:
       environmentIds.length > 1
-        ? `Rotated the project to epoch ${rotated.projectEpoch} across all ${environmentIds.length} of its active environments. Devices that still hold only the previous epoch key can read later shared values after the next dotrelay pull.`
-        : `Rotated the project to epoch ${rotated.projectEpoch}. Devices that still hold only the previous epoch key can read later shared values after the next dotrelay pull.`,
+        ? `Rotated the project's keys (now epoch ${rotated.projectEpoch}) across all ${environmentIds.length} of its active environments. Devices that only have the old key can read new Team values after their next dotrelay pull.`
+        : `Rotated the project's keys (now epoch ${rotated.projectEpoch}). Devices that only have the old key can read new Team values after their next dotrelay pull.`,
   };
 };
 
@@ -313,7 +315,7 @@ const storeRotatedEpochKey = async (
     if (!userId || !projectId || !teamId)
       throw new CliError(
         "conflict",
-        "the project epoch advanced, but this device has no account key to store the new project epoch key. Run dotrelay pull. Do not run project rotate again",
+        "the project's keys were rotated, but this device has no account key to save the new one. Don't run project rotate again. Run dotrelay pull.",
         {},
         "epoch_key_not_stored",
       );
@@ -353,7 +355,7 @@ const storeRotatedEpochKey = async (
           return;
         throw new CliError(
           "transient",
-          "the project epoch advanced, but this device did not store the new project epoch key. Run dotrelay pull. Do not run project rotate again",
+          "the project's keys were rotated, but this device couldn't save the new key. Don't run project rotate again. Run dotrelay pull.",
           {},
           "epoch_key_not_stored",
         );
@@ -362,7 +364,7 @@ const storeRotatedEpochKey = async (
     if (!workflow.keys.encryptionPublicKey)
       throw new CliError(
         "crypto",
-        "the project epoch advanced, but this device has no encryption key to seal the new project epoch key. Run dotrelay pull. Do not run project rotate again",
+        "the project's keys were rotated, but this device has no encryption key to seal the new one. Don't run project rotate again. Run dotrelay pull.",
         {},
         "epoch_key_not_stored",
       );
@@ -419,7 +421,7 @@ const storeRotatedEpochKey = async (
         if (recipient.id === workflow.deviceId && accountMasterKey === null)
           throw new CliError(
             "transient",
-            "the project epoch advanced, but this device did not store the new project epoch key. Run dotrelay pull. Do not run project rotate again",
+            "the project's keys were rotated, but this device couldn't save the new key. Don't run project rotate again. Run dotrelay pull.",
             {},
             "epoch_key_not_stored",
           );

@@ -54,9 +54,9 @@ const readQuotedValue = (
     const text = lines[line];
     if (text === undefined)
       throw new CliInvocationError(
-        `unterminated ${
+        `the ${
           quote === '"' ? "double" : "single"
-        }-quoted dotenv value for ${name} starting on line ${startLine + 1}, column ${startCol + 1}`,
+        } quote that opens ${name} on line ${startLine + 1}, column ${startCol + 1} is never closed`,
       );
     while (col < text.length) {
       const ch = text.charAt(col);
@@ -124,14 +124,14 @@ const parseEntries = (source: string): ParsedEntries => {
     const lead = original.length - original.trimStart().length;
     if (original.includes("\r"))
       throw new CliInvocationError(
-        `invalid dotenv assignment on line ${line}, column ${lead + 1}: the line contains a stray carriage return; use LF or CRLF line endings`,
+        `line ${line}, column ${lead + 1} has a stray carriage return. Save the file with LF or CRLF line endings.`,
       );
     const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s?(.*)$/ds.exec(
       trimmed,
     );
     if (!match)
       throw new CliInvocationError(
-        `invalid dotenv assignment on line ${line}, column ${lead + 1}`,
+        `line ${line}, column ${lead + 1} isn't a NAME=value assignment`,
       );
     const name = match[1] ?? "";
     const nameCol =
@@ -140,11 +140,11 @@ const parseEntries = (source: string): ParsedEntries => {
       1;
     if (!variableName.test(name))
       throw new CliInvocationError(
-        `invalid dotenv Variable name on line ${line}, column ${nameCol}`,
+        `the variable name on line ${line}, column ${nameCol} isn't valid. Names use letters, digits and underscores, and can't start with a digit.`,
       );
     if (seen.has(name))
       throw new CliInvocationError(
-        `duplicate dotenv Variable: ${name} on line ${line}`,
+        `${name} is set twice. The duplicate is on line ${line}.`,
       );
     seen.add(name);
     const valueStart = original.indexOf("=") + 1;
@@ -170,7 +170,7 @@ const parseEntries = (source: string): ParsedEntries => {
       if (content !== "" && !content.startsWith("#")) {
         const contentCol = parsed.col + 2 + (after.length - content.length);
         throw new CliInvocationError(
-          `unexpected content after the closing quote of ${name} on line ${parsed.line + 1}, column ${contentCol}`,
+          `there's extra text after the closing quote of ${name} on line ${parsed.line + 1}, column ${contentCol}`,
         );
       }
       value = parsed.value;
@@ -234,7 +234,7 @@ export const classifyDotenv = (
         : undefined;
       if (!classification)
         throw new CliInvocationError(
-          `classification is required for ${entry.name}`,
+          `${entry.name} needs to be marked Team or Only me`,
         );
       return Object.freeze({ ...entry, ...classification });
     }),
@@ -361,11 +361,11 @@ export const serializeDotenv = (
   for (const { name } of entries) {
     if (!variableName.test(name))
       throw new CliInvocationError(
-        `cannot write dotenv Variable ${JSON.stringify(name)}: names must match [A-Za-z_][A-Za-z0-9_]*`,
+        `can't write ${JSON.stringify(name)} to a dotenv file. Names must match [A-Za-z_][A-Za-z0-9_]*.`,
       );
     if (seen.has(name))
       throw new CliInvocationError(
-        `cannot write duplicate dotenv Variable: ${name}`,
+        `can't write ${name} to a dotenv file twice`,
       );
     seen.add(name);
   }

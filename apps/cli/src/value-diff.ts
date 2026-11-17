@@ -331,7 +331,7 @@ export const pullReplacementNotes = (
   }
   lines.push(
     `  ${paint(
-      `Comments, blank lines and the order of entries in ${sanitizeCliText(path)} are not preserved.`,
+      `Comments, blank lines and the order of entries in ${sanitizeCliText(path)} aren't kept.`,
       "faint",
     )}`,
   );
@@ -341,10 +341,10 @@ export const pullReplacementNotes = (
 export const publicationConfirmQuestion = (): string => "Publish? [y/N]";
 
 export const rollbackConfirmQuestion = (): string =>
-  "Roll back the selected Variables? [y/N]";
+  "Roll back the selected variables? [y/N]";
 
 export const pullConfirmQuestion = (path: string): string =>
   `Replace ${path} with decrypted values? [y/N]`;
 
 export const ROLLBACK_NOTE =
-  "This appends a new signed Rollback Revision; earlier Revisions are never rewritten or removed.";
+  "This adds a new signed revision. Earlier revisions are never rewritten or removed.";

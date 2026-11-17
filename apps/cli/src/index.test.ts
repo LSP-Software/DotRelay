@@ -181,9 +181,7 @@ describe("CLI foundation", () => {
   test("rejects forbidden flags even when help is requested", async () => {
     const result = await run(["--insecure", "--help"]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toBe(
-      "■  Invalid invocation\n│  --insecure is not supported\n└\n\n",
-    );
+    expect(result.stderr).toBe("■  DotRelay doesn't accept --insecure\n└\n\n");
   });
 
   test("maps an empty Git remote result to repository_missing", async () => {
@@ -267,7 +265,7 @@ describe("CLI foundation", () => {
         ok: true,
         repository: "github.com/LSP-Software/DotRelay",
         nextAction:
-          "sign in to this Server Profile and enroll a Device to verify the repository identity",
+          "Run dotrelay login to sign in and enroll this device, so DotRelay can verify this repository with GitHub.",
       });
       // A detected selection that could not be verified records nothing, so
       // the next run starts from the Git configuration again.
@@ -905,11 +903,10 @@ describe("command-to-HTTP administration", () => {
         runtimeForCommandState(state),
       );
       expect(human.exitCode).toBe(6);
-      expect(human.stderr).toContain(
-        "No Device is enrolled for this Server Profile",
-      );
-      expect(human.stderr).toContain(
-        "Run dotrelay login or dotrelay device enroll",
+      const humanText = human.stderr.replace(/\n│ +/g, " ");
+      expect(humanText).toContain("This machine isn't enrolled on this server");
+      expect(humanText).toContain(
+        "Run dotrelay login, or dotrelay device enroll",
       );
       expect(fixture.requests).toHaveLength(0);
     } finally {
@@ -1334,7 +1331,7 @@ describe("protected command Environment selection", () => {
         terminal: { input, output },
       });
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("Choose an option from the list");
+      expect(result.stderr).toContain("Choose one of the options in the list");
       expect(
         fixture.requests.some((request) =>
           request.path.includes("/workspace/boundary"),
@@ -1482,8 +1479,8 @@ describe("protected command Environment selection", () => {
         runtimeForProtocolState(state),
       );
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain(
-        "--no-input requires explicit --environment context",
+      expect(result.stderr.replace(/\n│ +/g, " ")).toContain(
+        "With --no-input, dotrelay pull needs --environment",
       );
       expect(
         fixture.requests.some((request) =>
@@ -1519,8 +1516,8 @@ describe("protected command Environment selection", () => {
         runtimeForProtocolState(state),
       );
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain(
-        "--no-input requires explicit --environment context",
+      expect(result.stderr.replace(/\n│ +/g, " ")).toContain(
+        "With --no-input, dotrelay pull needs --environment",
       );
       expect(fixture.requests).toHaveLength(0);
       expect(await Bun.file(state.contextPath).text()).toBe(saved);
@@ -1553,8 +1550,9 @@ describe("protected command Environment selection", () => {
       );
       expect(result.exitCode).toBe(2);
       expect(result.stderr).toContain(
-        "Multiple Environments are available; pass --environment",
+        "■  This project has more than one environment\n",
       );
+      expect(result.stderr).toContain("Pass --environment");
       expect(
         fixture.requests.some((request) =>
           request.path.includes("/workspace/boundary"),
@@ -1600,7 +1598,9 @@ describe("protected command Environment selection", () => {
         { ...runtimeForProtocolState(state), confirm: async () => false },
       );
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("Pull confirmation was declined");
+      expect(result.stderr).toContain(
+        `You didn't confirm, so ${outputPath} wasn't changed`,
+      );
       expect(JSON.parse(await Bun.file(state.contextPath).text())).toEqual({
         serverProfileId,
         projectId,
@@ -2273,7 +2273,9 @@ describe("Project resolution across Teams and lifecycles", () => {
         category: "invocation",
         exitCode: 2,
       });
-      expect(result.stderr).toContain("the specified Team is not available");
+      expect(result.stderr).toContain(
+        "You're not an active member of that team",
+      );
       expect(fixture.requests.map((request) => request.path)).toEqual([
         "/api/v1/github-repositories/resolve?host=github.com&owner=LSP-Software&name=DotRelay",
         "/api/v1/teams",
@@ -2310,7 +2312,7 @@ describe("Project resolution across Teams and lifecycles", () => {
       });
       const detail = String(diagnostic.detail);
       expect(detail).toContain(
-        "multiple Projects are linked to this GitHub Repository",
+        "More than one project is linked to this GitHub repository",
       );
       expect(detail).toContain("Platform");
       expect(detail).toContain("Acme");
@@ -2461,8 +2463,8 @@ describe("explicit GitHub repository choice", () => {
         githubRepositoryId: "1311418612",
       });
       const renderedText = rendered.join("");
-      expect(renderedText).toContain("origin — my-user/DotRelay");
-      expect(renderedText).toContain("upstream — LSP-Software/DotRelay");
+      expect(renderedText).toContain("origin (my-user/DotRelay)");
+      expect(renderedText).toContain("upstream (LSP-Software/DotRelay)");
       expect(renderedText).not.toContain("git@github.com");
       expect(JSON.parse(await Bun.file(contextPath).text())).toEqual({
         repositoryRemote: "origin",
@@ -2638,7 +2640,7 @@ describe("explicit GitHub repository choice", () => {
         exitCode: 2,
       });
       const detail = String(diagnostic.detail);
-      expect(detail).toContain("no longer matches the Git remotes");
+      expect(detail).toContain("no longer points at the same repository");
       expect(detail).toContain("--remote <remote-name>");
       // The stale choice is left in place for the operator to resolve; it is
       // never silently re-detected as a different Repository.
@@ -2870,7 +2872,9 @@ describe("explicit GitHub repository choice", () => {
         category: "invocation",
         exitCode: 2,
       });
-      expect(String(diagnostic.detail)).toContain("not linked");
+      expect(String(diagnostic.detail)).toContain(
+        "isn't linked to a project you can access",
+      );
       // The fork's identity was looked up; the source Project never was, and
       // no workspace boundary (the access boundary) was ever queried.
       expect(
@@ -3286,8 +3290,8 @@ describe("CLI sign-in display", () => {
         "Signed in to relay. This device is enrolled.",
       );
       expect(result.stdout).toContain("Save your recovery code now");
-      expect(result.stdout).toContain(
-        "Without this code or another unlocked device",
+      expect(result.stdout.replace(/\n│ +/g, " ")).toContain(
+        "If you lose this code and every unlocked device, nobody can decrypt your values",
       );
       expect(fixture.bootstrapCount()).toBe(1);
     } finally {
@@ -3596,12 +3600,8 @@ describe("CLI sign-in display", () => {
         "Signed in to relay. This device is enrolled.",
       );
       const output = captured.text();
-      expect(output).toContain(
-        "The Server Profile is unreachable; retry 1 — next in 1s",
-      );
-      expect(output).toContain(
-        "The Server Profile is unreachable; retry 2 — next in 1s",
-      );
+      expect(output).toContain("Can't reach the server. Retry 1 in 1s");
+      expect(output).toContain("Can't reach the server. Retry 2 in 1s");
     } finally {
       await fixture.cleanup();
     }
@@ -3746,7 +3746,7 @@ describe("CLI sign-in display", () => {
       );
       expect(result.exitCode).toBe(0);
       expect(captured.text()).toContain(
-        "The Server Profile is temporarily unavailable; retry 1 — next in 1s",
+        "The server is busy or briefly down. Retry 1 in 1s",
       );
     } finally {
       if (wasTty === undefined) delete ttyOutput.isTTY;
@@ -4536,7 +4536,7 @@ describe("actionable error categories at the process boundary", () => {
       });
       expect(human.exitCode).toBe(5);
       expect(human.stderr).toContain(
-        "The Server Profile rejected the cryptographic request",
+        "The server rejected the encrypted data in this request",
       );
     } finally {
       await cleanup();

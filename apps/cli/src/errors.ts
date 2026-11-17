@@ -151,6 +151,7 @@ const safeDiagnosticCodes = new Set([
   "project_key_unavailable",
   "project_not_linked",
   "publication_invalid",
+  "publication_uncertain",
   "rate_limited",
   "rate_limit_unavailable",
   "recovery_code_malformed",
@@ -279,12 +280,12 @@ export const categoryForProblem = (
 // The Server Profile publishes the install link when it knows its app.
 export const repositoryAccessDeniedDetail = (installUrl?: string): string =>
   [
-    "DotRelay could not access this GitHub repository.",
+    "DotRelay can't access this GitHub repository.",
     "1. Check the repository name and that your GitHub account can open it.",
     installUrl
       ? `2. Install the DotRelay GitHub App and choose this repository: ${installUrl}`
       : "2. Install this server's DotRelay GitHub App and choose this repository. Ask the server operator for the install link. Installed already? Add the repository at https://github.com/settings/installations.",
-    "3. If an organization owns the repository, an organization owner may need to approve the app, and SSO may need authorizing. Then retry your command.",
+    "3. If an organization owns the repository, an organization owner may need to approve the app, and you may need to authorize SSO. Then retry your command.",
   ].join("\n");
 
 // A wait the operator can act on: "30 seconds", "4 minutes", "2 hours".
@@ -329,68 +330,74 @@ export const detailForProblem = (
   if (code === "alpha_admission_required")
     return alphaAdmissionDetail(context.origin);
   if (code === "authentication_required")
-    return "login is required for this Server Profile; run dotrelay login";
+    return "You're not signed in to this server. Run dotrelay login.";
   if (code === "device_not_active")
-    return "this Device is not active; run dotrelay device enroll to re-authorize it";
+    return "This device isn't active anymore, so it has to be enrolled again. Run dotrelay device enroll.";
   if (code === "device_proof_required")
-    return "the Server Profile did not accept this Device's proof of its key; run the command again, and run dotrelay login if it keeps failing";
+    return "The server didn't accept this device's proof of its key. Run the command again. If it keeps failing, sign in again with dotrelay login.";
   if (code === "recent_sign_in_required")
-    return "this account has no active Device, so this action needs a sign-in from the last ten minutes; run dotrelay login and try again";
+    return "This account has no active device, so this needs a sign-in from the last ten minutes. Sign in with dotrelay login, then try again.";
   if (code === "membership_not_key_provisioned")
     return [
-      "you joined this Team, but its Project keys have not been shared with you yet.",
-      'A Team owner or admin has to share them: in the DotRelay web app they open Members and choose "Share project keys" for you, or they run dotrelay team share-keys <your-github-login>.',
+      "You joined this team, but nobody has shared its project keys with you yet.",
+      'A team owner or admin has to share them. In the DotRelay web app they open Members and choose "Share project keys" for you, or they run dotrelay team share-keys <your-github-login>.',
       "Then run dotrelay pull.",
     ].join("\n");
   if (code === "membership_not_active")
     // Servers before membership_not_key_provisioned send this code for a
     // Membership waiting for keys too, so both repairs are still named.
     return [
-      "your Membership in this Team is not active yet.",
-      'If you accepted an invitation, a Team owner or admin still has to share the Project keys with you: in the DotRelay web app they open Members and choose "Share project keys" for you, or they run dotrelay team share-keys <your-github-login>.',
-      "If you were removed from the Team, ask an owner or admin to invite you again.",
+      "Your membership in this team isn't active yet.",
+      'If you accepted an invitation, a team owner or admin still has to share the project keys with you. In the DotRelay web app they open Members and choose "Share project keys" for you, or they run dotrelay team share-keys <your-github-login>.',
+      "If you were removed from the team, ask an owner or admin to invite you again.",
       "Then run dotrelay pull.",
     ].join("\n");
-  if (code === "forbidden") return "the Server Profile denied the request";
+  if (code === "forbidden")
+    return "The server says your account isn't allowed to do this.";
   if (code === "resource_not_found")
-    return "the requested resource was not found";
+    return "The server couldn't find what this command asked for. It may have been removed, or you may no longer have access to it.";
   if (code === "invalid_request")
-    return "the Server Profile rejected the request";
-  if (code === "payload_too_large") return "the request was too large";
+    return "The server rejected the request as invalid.";
+  if (code === "payload_too_large")
+    return "The request was too large for the server.";
   if (code === "genesis_exists")
-    return "this Environment already has a genesis Revision";
+    return "This environment has already been published.";
   if (code === "repository_access_denied")
     return repositoryAccessDeniedDetail();
   if (code === "github_rate_limited")
-    return "GitHub rate-limited the Server Profile's repository lookup; wait for the stated retry window and retry";
+    return "GitHub is rate-limiting this server's repository lookups. Wait a while, then try again.";
   if (code === "github_unavailable")
-    return "GitHub could not be reached through the Server Profile; established sync is unaffected, retry once GitHub is available";
+    return "The server couldn't reach GitHub. Projects that are already linked still sync. Try again once GitHub is back.";
   if (code === "rate_limited")
     return context.retryAfterSeconds !== undefined &&
       Number.isFinite(context.retryAfterSeconds) &&
       context.retryAfterSeconds >= 0
-      ? `the Server Profile rate-limited the request; wait ${describeWait(context.retryAfterSeconds)} and retry`
-      : "the Server Profile rate-limited the request; wait and retry";
+      ? `The server is rate-limiting requests. Wait ${describeWait(context.retryAfterSeconds)} and retry.`
+      : "The server is rate-limiting requests. Wait a moment and retry.";
   if (code === "authored_at_out_of_range")
     return [
-      "the Server Profile rejected the Revision's timestamp: it is earlier than this Device's activation, your Membership, or the Revision before it, or more than 10 minutes in the future.",
-      "Check that this machine's system clock and time zone are correct (enable automatic time sync), then run the command again.",
+      "The server rejected the revision's timestamp. It's earlier than this device's activation, your membership, or the previous revision, or more than 10 minutes in the future.",
+      "Check that this machine's system clock and time zone are right (turn on automatic time sync), then run the command again.",
     ].join("\n");
   if (code === "pending_invitation_limit")
-    return "this Team has reached its limit of pending invitations; revoke invitations that are no longer needed in the DotRelay web app, or wait for them to be accepted, declined, or expire";
+    return "This team has too many pending invitations. In the DotRelay web app, revoke invitations that are no longer needed, or wait for some to be accepted, declined or expire.";
   if (code === "rate_limit_unavailable")
-    return "the Server Profile's rate limiter is unavailable; retry later";
+    return "The server's rate limiter isn't available, so it can't take requests right now. Try again later.";
   if (code === "owner_transfer_required")
-    return "you are this Team's last active owner; make another active Member an owner in the DotRelay web app, or delete the Team, first";
+    return "You're this team's last active owner. First make another active member an owner in the DotRelay web app, or delete the team.";
   if (categoryForProblem(code) === "conflict")
-    return "the requested change conflicts with current Server Profile state";
+    return "This change conflicts with what's on the server now. Try the command again.";
   if (categoryForProblem(code) === "crypto")
-    return "the Server Profile rejected the cryptographic request";
-  return "the Server Profile could not complete the request";
+    return "The server rejected the encrypted data in this request. Check that your DotRelay CLI is up to date.";
+  return "The server couldn't complete the request. Try again in a moment.";
 };
 
+// A sentence that opens with a command ("dotrelay setup needs ...") keeps
+// the command as typed.
 const capitalize = (text: string): string =>
-  text.length === 0 ? text : `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+  text.length === 0 || /^dotrelay\s/.test(text)
+    ? text
+    : `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 
 export type ErrorPresentation = Readonly<{
   readonly title: string;
@@ -399,85 +406,132 @@ export type ErrorPresentation = Readonly<{
 }>;
 
 const errorTitles: Record<string, string> = {
-  authentication_required: "Login required",
-  alpha_admission_required: "Private alpha",
-  device_not_active: "Device not active",
-  device_proof_required: "Device not proven",
-  recent_sign_in_required: "Recent sign-in required",
-  membership_not_active: "Membership not active",
-  membership_not_key_provisioned: "Waiting for Project keys",
-  device_bundle_missing: "No Device enrolled",
-  device_enrollment_failed: "Device enrollment failed",
-  device_enrollment_unavailable: "Device enrollment unavailable",
-  device_authorization_denied: "Sign-in denied",
-  device_authorization_expired: "Sign-in expired",
+  authentication_required: "You're signed out",
+  alpha_admission_required: "Not on the alpha list yet",
+  device_not_active: "This device isn't active",
+  device_proof_required: "The server didn't accept this device's key",
+  recent_sign_in_required: "Sign in again to do this",
+  membership_not_active: "Your team membership isn't active",
+  membership_not_key_provisioned: "Waiting for project keys",
+  device_bundle_missing: "This machine isn't enrolled",
+  device_enrollment_failed: "Couldn't enroll this device",
+  device_enrollment_unavailable: "Can't enroll devices right now",
+  device_authorization_denied: "Sign-in was denied",
+  device_authorization_expired: "The sign-in code expired",
   device_authorization_timeout: "Sign-in timed out",
-  device_authorization_failed: "Sign-in failed",
-  forbidden: "Access denied",
-  profile_mismatch: "Profile mismatch",
-  user_mismatch: "User mismatch",
-  repository_access_denied: "GitHub access",
-  github_rate_limited: "GitHub rate limit",
-  github_unavailable: "GitHub unreachable",
-  service_unavailable: "Service unreachable",
-  request_failed: "Service error",
-  rate_limited: "Rate limited",
-  rate_limit_unavailable: "Rate limiter unavailable",
-  response_invalid: "Invalid service response",
-  response_too_large: "Response too large",
-  genesis_exists: "Environment already published",
-  output_conflict: "Output file differs",
-  output_tracked: "Output is Git-tracked",
-  output_write_failed: "Could not write output",
-  input_read_failed: "Could not read input",
-  deletion_requires_approval: "Approval required",
-  unsafe_stdout: "Unsafe output",
-  staging_expired: "Staged request expired",
-  staged_object_missing: "Staged request missing",
-  invitation_expired: "Invitation expired",
+  device_authorization_failed: "Couldn't sign in",
+  forbidden: "Not allowed",
+  profile_mismatch: "This is for a different server",
+  user_mismatch: "This is for a different user",
+  repository_access_denied: "DotRelay can't see this repository",
+  github_rate_limited: "GitHub is rate-limiting requests",
+  github_unavailable: "Couldn't reach GitHub",
+  service_unavailable: "Couldn't reach the server",
+  request_failed: "The server couldn't finish the request",
+  rate_limited: "Too many requests",
+  rate_limit_unavailable: "The server can't take requests right now",
+  response_invalid: "The server sent a response DotRelay can't read",
+  response_too_large: "The server's response was too large",
+  genesis_exists: "Already published",
+  output_conflict: "The file doesn't match the environment",
+  output_tracked: "Git tracks this file",
+  output_write_failed: "Couldn't write the file",
+  input_read_failed: "Couldn't read the file",
+  deletion_requires_approval: "Removing variables needs your approval",
+  unsafe_stdout: "This would print values to your terminal",
+  staging_expired: "The request expired",
+  staged_object_missing: "The request is gone",
+  invitation_expired: "The invitation expired",
   pending_invitation_limit: "Too many pending invitations",
-  owner_transfer_required: "Ownership transfer required",
-  authored_at_out_of_range: "Clock out of range",
-  rollback_target_unavailable: "Rollback target unavailable",
-  rollback_variable_absent: "Rollback target missing Variables",
-  unreadable_manifest: "Unreadable manifest",
-  history_unverifiable: "Environment history does not verify",
-  unconfirmed_legacy_lane: "Legacy Value from an unconfirmed teammate",
-  account_key_not_unlocked: "Device not unlocked",
-  account_key_unlock_failed: "Could not unlock account",
-  account_key_transfer_invalid: "Account key transfer invalid",
-  recovery_code_malformed: "Recovery code invalid",
-  recovery_wrapper_missing: "No Recovery Code wrapper",
-  project_ambiguous: "Multiple Projects match",
-  project_key_unavailable: "Project key unavailable",
-  project_key_mismatch: "Project key does not match",
-  project_epoch_rollback: "Project epoch went backwards",
-  account_roster_untrusted: "Account Device list untrusted",
-  account_fingerprint_mismatch: "Account fingerprint does not match",
-  account_fingerprint_required: "Account fingerprint required",
-  transfer_recipient_unverified: "Device not in your signed list",
-  command_start_failed: "Could not start command",
-  membership_pending: "Waiting for Project keys",
-  environment_ambiguous: "Ambiguous Environment",
-  environment_not_found: "Environment not found",
-  environment_context_missing: "Environment context missing",
-  repository_ambiguous: "Ambiguous repository",
+  owner_transfer_required: "Make someone else an owner first",
+  authored_at_out_of_range: "Check this machine's clock",
+  rollback_target_unavailable: "Can't roll back to that revision",
+  rollback_variable_absent: "That revision doesn't have these variables",
+  unreadable_manifest: "This device can't read the environment",
+  history_unverifiable: "The environment's history doesn't verify",
+  unconfirmed_legacy_lane: "A value from a teammate you haven't confirmed",
+  account_key_not_unlocked: "This device can't read values yet",
+  account_key_unlock_failed: "Couldn't unlock your account key",
+  account_key_transfer_invalid: "The transfer didn't work",
+  recovery_code_malformed: "That recovery code isn't valid",
+  recovery_wrapper_missing: "No recovery code is set up",
+  project_ambiguous: "More than one project matches",
+  project_key_unavailable: "This device doesn't have the project key",
+  project_key_mismatch: "The project key doesn't match",
+  project_epoch_rollback: "The server sent an older project key",
+  account_roster_untrusted: "Your device list doesn't verify",
+  account_fingerprint_mismatch: "The account fingerprint doesn't match",
+  account_fingerprint_required: "Confirm the account fingerprint",
+  transfer_recipient_unverified: "That device isn't in your signed device list",
+  command_start_failed: "Couldn't start the command",
+  membership_pending: "Waiting for project keys",
+  environment_ambiguous: "More than one environment matches",
+  environment_not_found: "No such environment",
+  environment_context_missing: "No environment selected",
+  repository_ambiguous: "More than one repository",
   repository_missing: "No GitHub remote",
-  repository_renamed: "Repository renamed",
-  command_unavailable: "Command unavailable",
+  repository_renamed: "The remote points at a different repository",
+  command_unavailable: "This command isn't available",
 };
 
 const categoryTitles: Record<CliErrorCategory, string> = {
-  invocation: "Invalid invocation",
-  "incomplete-export": "Incomplete export",
-  conflict: "Conflict",
-  crypto: "Cryptographic error",
-  authentication: "Authentication error",
-  transient: "Service error",
-  "local-io": "Local error",
+  invocation: "Check the command",
+  "incomplete-export": "Some values are missing",
+  conflict: "Couldn't apply the change",
+  crypto: "Couldn't verify encrypted data",
+  authentication: "You don't have access",
+  transient: "Couldn't reach the server",
+  "local-io": "Something went wrong on this machine",
 };
 
-const remediationPattern = /;\s*(re-)?run dotrelay [^\n]*$/s;
+/** The generic headline for a category, used when a code has none. */
+export const categoryTitleFor = (category: CliErrorCategory): string =>
+  categoryTitles[category];
+
+// The older form: "...; run dotrelay x to do y".
+const legacyRemediationPattern = /;\s*(re-)?run (dotrelay [^\n]*)$/s;
+
+// The sentence form: "... Run dotrelay x." as the last sentence. A command
+// can contain dots (an origin, a file name), so a sentence ends only at a
+// dot followed by a space or the end of the line.
+const sentenceRemediationPattern =
+  /(^|[.?]\s+)(Run|Re-run) (dotrelay (?:[^\n.]|\.(?=\S))*)\.?\s*$/;
+
+// "dotrelay x to do y" names the command and why; the fix keeps the command.
+const commandOnly = (command: string): string =>
+  command.replace(/\s+to\s.*$/s, "").trim();
+
+// A sentence that offers two routes or a follow-up step ("x, then y",
+// "x or y") stays in the detail; only a single command becomes a fix.
+const isSingleCommand = (command: string): boolean =>
+  !/[,;]|\sthen\s/.test(command) && !/\sor\s(?![^()]*\))/.test(command);
+
+// Splits a trailing "Run dotrelay x." (or the older "; run dotrelay x")
+// off the first line, so the card can show it as the fix and the same
+// command isn't printed twice next to the `next` line.
+const splitRemediation = (
+  line: string,
+): Readonly<{ detail: string; fix?: string }> => {
+  const legacy = legacyRemediationPattern.exec(line);
+  if (legacy?.[2] !== undefined)
+    return {
+      detail: line.slice(0, legacy.index).trimEnd(),
+      fix: `${legacy[1] ? "Re-run" : "Run"} ${commandOnly(legacy[2])}`,
+    };
+  const sentence = sentenceRemediationPattern.exec(line);
+  if (sentence?.[3] !== undefined) {
+    const command = commandOnly(sentence[3]);
+    if (isSingleCommand(command)) {
+      const end = sentence.index + (sentence[1]?.length ?? 0);
+      const detail = line.slice(0, end).trimEnd();
+      return {
+        detail: detail.length > 0 ? detail : line,
+        ...(detail.length > 0 ? { fix: `${sentence[2]} ${command}` } : {}),
+      };
+    }
+  }
+  return { detail: line };
+};
 
 export const presentationForError = (
   error: unknown,
@@ -485,37 +539,15 @@ export const presentationForError = (
 ): ErrorPresentation => {
   const diagnostic = diagnosticForError(error, options);
   const lines = diagnostic.detail.split("\n");
-  const first = lines[0] ?? "";
-  const rest = lines.slice(1);
   const title =
     errorTitles[diagnostic.code] ?? categoryTitles[diagnostic.category];
-  let detail = first;
-  let fixes = rest;
-  if (fixes.length === 0) {
-    const match = remediationPattern.exec(detail);
-    if (match?.index !== undefined) {
-      const command = match[0]
-        .replace(/^;\s*/, "")
-        .replace(/^run /, "run ")
-        .replace(/^re-run /, "Re-run ");
-      const verb = command.startsWith("run ")
-        ? "Run"
-        : command.startsWith("Re-run ")
-          ? "Re-run"
-          : "Run";
-      const target = command
-        .replace(/^(run |Re-run )/, "")
-        .replace(/\s*to .*/, "")
-        .trim();
-      detail = capitalize(detail.slice(0, match.index).trimEnd());
-      fixes = [`${verb} ${target}`];
-    } else {
-      detail = capitalize(detail);
-    }
-  } else {
-    detail = capitalize(detail);
-  }
-  return { title, detail, fixes: fixes.map((fix) => capitalize(fix)) };
+  const { detail, fix } = splitRemediation(lines[0] ?? "");
+  const fixes = [...(fix ? [fix] : []), ...lines.slice(1)];
+  return {
+    title,
+    detail: capitalize(detail),
+    fixes: fixes.map((line) => capitalize(line)),
+  };
 };
 
 // A failure that is unmistakably cryptographic even though the caller did not
@@ -533,7 +565,7 @@ const isHistoryVerificationError = (error: unknown): error is Error =>
   error instanceof Error && error.name === "ProtocolVerificationError";
 
 const historyVerificationDetail = (error: Error): string =>
-  `the Server Profile returned Environment history that does not verify (${sanitizeCliLine(error.message).slice(0, 200)}). Nothing was written. Do not trust this Server Profile until you have checked it`;
+  `The server sent environment history that doesn't verify (${sanitizeCliLine(error.message).slice(0, 200)}). Nothing was written. Don't trust this server until you've checked it.`;
 
 const isCryptoRuntimeError = (error: unknown): boolean => {
   if (typeof error !== "object" || error === null) return false;

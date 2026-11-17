@@ -12,7 +12,7 @@ import {
   selectionRow,
   selectionTitle,
 } from "./components";
-import { paint as paintTone } from "./theme";
+import { paint as paintTone, terminalWidth, visibleWidth } from "./theme";
 import { CliInvocationError } from "./errors";
 import { readTerminalLine, type TerminalIo } from "./terminal";
 
@@ -35,8 +35,8 @@ type WritableTty = NodeJS.WritableStream & Partial<{ readonly isTTY: boolean }>;
 // onto the command line. The full form backs yes/no confirmations and
 // option pickers, where --no-input is always the automation path.
 export const UNREADABLE_TERMINAL_DETAIL =
-  "the terminal could not be read, so the interactive prompt went unanswered";
-export const UNREADABLE_TERMINAL_MESSAGE = `${UNREADABLE_TERMINAL_DETAIL}; run in an interactive terminal, or re-run with --no-input`;
+  "Couldn't read an answer from the terminal, so the question went unanswered.";
+export const UNREADABLE_TERMINAL_MESSAGE = `${UNREADABLE_TERMINAL_DETAIL} Run this in an interactive terminal, or run it again with --no-input.`;
 export const isUnreadableTerminalError = (
   error: unknown,
 ): error is CliInvocationError =>
@@ -44,14 +44,31 @@ export const isUnreadableTerminalError = (
   (error.message === UNREADABLE_TERMINAL_DETAIL ||
     error.message === UNREADABLE_TERMINAL_MESSAGE);
 
+/**
+ * Replaces the region drawn last time with `next` and returns how many
+ * terminal rows it now covers. A line wider than the terminal wraps onto
+ * several rows; counting those keeps the next redraw from leaving stale
+ * text above it on a narrow terminal.
+ */
 export const rewriteRegion = (
   output: NodeJS.WritableStream,
   previousLines: number,
   next: string,
 ): number => {
-  const tty = output as WritableTty;
+  const tty = output as WritableTty & Partial<{ readonly columns: number }>;
   const text = next.endsWith("\n") ? next : `${next}\n`;
-  const lines = text.split("\n").length - (text.endsWith("\n") ? 1 : 0);
+  const columns =
+    typeof tty.columns === "number" && tty.columns > 0
+      ? tty.columns
+      : terminalWidth();
+  const lines = text
+    .slice(0, -1)
+    .split("\n")
+    .reduce(
+      (rows, line) =>
+        rows + Math.max(1, Math.ceil(visibleWidth(line) / columns)),
+      0,
+    );
   if (tty.isTTY && previousLines > 0) {
     output.write(`\x1b[${previousLines}F`);
     output.write("\x1b[0J");
@@ -133,14 +150,16 @@ export const selectOption = async (
   }> = {},
 ): Promise<string> => {
   if (choices.length === 0)
-    throw new CliInvocationError("there is nothing to select");
+    throw new CliInvocationError("There's nothing to choose from.");
   if (choices.length === 1) {
     const only = choices[0];
-    if (!only) throw new CliInvocationError("there is nothing to select");
+    if (!only) throw new CliInvocationError("There's nothing to choose from.");
     return only.id;
   }
   if (options.noInput)
-    throw new CliInvocationError(`${title} requires an explicit choice`);
+    throw new CliInvocationError(
+      "There's more than one to choose from, and --no-input can't ask which. Name it on the command line.",
+    );
   const terminal = options.terminal ?? {
     input: process.stdin,
     output: process.stderr,
@@ -163,13 +182,17 @@ export const selectOption = async (
       for (;;) {
         const key = await readRawKey(input);
         if (key === "\u0003")
-          throw new CliInvocationError("selection cancelled");
+          throw new CliInvocationError("Cancelled. Nothing was chosen.");
         if (key === "\r" || key === "\n") {
           if (options.defaultToFirst === false && !moved)
-            throw new CliInvocationError("choose an option from the list");
+            throw new CliInvocationError(
+              "Choose one of the options in the list.",
+            );
           const chosen = choices[cursor];
           if (!chosen)
-            throw new CliInvocationError("choose an option from the list");
+            throw new CliInvocationError(
+              "Choose one of the options in the list.",
+            );
           rewriteRegion(output, rendered, selectionResult(title, chosen.label));
           return chosen.id;
         }
@@ -210,16 +233,17 @@ export const selectOption = async (
   const trimmed = line.trim();
   if (trimmed.length === 0) {
     if (options.defaultToFirst === false)
-      throw new CliInvocationError("choose an option from the list");
+      throw new CliInvocationError("Choose one of the options in the list.");
     const first = choices[0];
-    if (!first) throw new CliInvocationError("there is nothing to select");
+    if (!first) throw new CliInvocationError("There's nothing to choose from.");
     return first.id;
   }
   const index = Number.parseInt(trimmed, 10);
   if (!Number.isInteger(index) || index < 1 || index > choices.length)
-    throw new CliInvocationError("choose an option from the list");
+    throw new CliInvocationError("Choose one of the options in the list.");
   const chosen = choices[index - 1];
-  if (!chosen) throw new CliInvocationError("choose an option from the list");
+  if (!chosen)
+    throw new CliInvocationError("Choose one of the options in the list.");
   return chosen.id;
 };
 
@@ -275,8 +299,7 @@ const runRawConfirm = async (
   try {
     for (;;) {
       const key = await readRawKey(input);
-      if (key === "\u0003")
-        throw new CliInvocationError("confirmation cancelled");
+      if (key === "\u0003") throw new CliInvocationError("Cancelled.");
       const single = key.length === 1 ? key.toLowerCase() : key;
       let decided: boolean | null = null;
       if (single === "y") decided = true;
@@ -342,7 +365,7 @@ export const confirmAction = async (
   if (options.confirm) return options.confirm(question);
   if (options.noInput)
     throw new CliInvocationError(
-      "this command requires interactive input; remove --no-input to answer the prompt",
+      "This command needs an answer from you. Run it again without --no-input.",
     );
   const terminal = options.terminal ?? {
     input: process.stdin,
@@ -377,7 +400,7 @@ export const readTerminalSecret = async (
   if (options.prompt) return options.prompt(question);
   if (options.noInput)
     throw new CliInvocationError(
-      "--no-input does not read secrets from the terminal; pass the value with a --*-file flag or pipe it to stdin",
+      "--no-input can't ask for a secret. Pass it in a file with the command's --*-file flag, or pipe it to stdin.",
     );
   const input = (terminal?.input ?? process.stdin) as ReadableRaw;
   const output = terminal?.output ?? process.stderr;
@@ -402,12 +425,12 @@ export const readTerminalSecret = async (
       for (;;) {
         const key = await readRawKey(input);
         if (key === "\u0003" || key === "\u001b")
-          throw new CliInvocationError("secret input cancelled");
+          throw new CliInvocationError("Cancelled.");
         if (key.startsWith("\u001b")) continue;
         for (const ch of key) {
           if (ch === "\r" || ch === "\n") {
             if (buffer.length === 0)
-              throw new CliInvocationError(`${question} must not be empty`);
+              throw new CliInvocationError(`${question} can't be empty.`);
             return buffer;
           }
           if (ch === "\u0008" || ch === "\u007f") {
@@ -434,7 +457,7 @@ export const readTerminalSecret = async (
     }
   }
   output.write(
-    "warning: stdin is not a terminal, so the secret may be echoed or logged by the calling process\n",
+    "stdin isn't a terminal, so the program sending the secret may echo or log it.\n",
   );
   return (await readTerminalLine(question, terminal)).trim();
 };

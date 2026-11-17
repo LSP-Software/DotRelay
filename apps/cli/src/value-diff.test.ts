@@ -314,7 +314,7 @@ describe("CLI value diffs", () => {
       },
     ];
     expect(rollbackConfirmQuestion()).toBe(
-      "Roll back the selected Variables? [y/N]",
+      "Roll back the selected variables? [y/N]",
     );
     expect(reviewBody(changes, destination, false)).toBe(
       [
@@ -456,7 +456,7 @@ describe("pull replacement notes", () => {
     expect(text).toContain("LOCAL_ONLY  added locally");
     expect(text).toContain("dotrelay push first");
     expect(text).toContain(
-      "Comments, blank lines and the order of entries in .env are not preserved.",
+      "Comments, blank lines and the order of entries in .env aren't kept.",
     );
   });
 

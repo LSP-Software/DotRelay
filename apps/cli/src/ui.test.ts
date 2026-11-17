@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { PassThrough } from "node:stream";
 import {
   createClassificationBoard,
@@ -6,6 +6,7 @@ import {
 } from "./classify-ui";
 import { CliInvocationError } from "./errors";
 import type { TerminalIo } from "./terminal";
+import { colorLevel, setToneLevel } from "./theme";
 import {
   confirmAction,
   readTerminalSecret,
@@ -26,6 +27,22 @@ describe("CLI region rewrite", () => {
     rewriteRegion(output, 4, "next line\n");
     expect(written).not.toContain("\x1b[2J");
     expect(written).not.toContain("\x1b[H");
+  });
+
+  test("counts a line wider than the terminal as the rows it wraps onto", () => {
+    const output = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 20,
+    });
+    let written = "";
+    output.on("data", (chunk: string | Buffer) => {
+      written += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+    });
+    // 45 visible characters on a 20-column terminal take 3 rows.
+    const rows = rewriteRegion(output, 0, `${"x".repeat(45)}\nshort`);
+    expect(rows).toBe(4);
+    rewriteRegion(output, rows, "next");
+    expect(written).toContain("\x1b[4F");
   });
 });
 
@@ -55,7 +72,9 @@ describe("selectOption line input", () => {
         prompt: async () => "",
         defaultToFirst: false,
       }),
-    ).rejects.toThrow(new CliInvocationError("choose an option from the list"));
+    ).rejects.toThrow(
+      new CliInvocationError("Choose one of the options in the list."),
+    );
   });
 
   test("accepts an explicit number when defaultToFirst is false", async () => {
@@ -73,7 +92,9 @@ describe("selectOption line input", () => {
         terminal: selectTerminal(),
         prompt: async () => "3",
       }),
-    ).rejects.toThrow(new CliInvocationError("choose an option from the list"));
+    ).rejects.toThrow(
+      new CliInvocationError("Choose one of the options in the list."),
+    );
   });
 
   test("reports an unreadable terminal with a remedy on closed stdin", async () => {
@@ -84,7 +105,7 @@ describe("selectOption line input", () => {
     }).catch((caught) => caught);
     expect(error).toBeInstanceOf(CliInvocationError);
     expect(String((error as Error).message)).toContain(
-      "the terminal could not be read",
+      "Couldn't read an answer from the terminal",
     );
     expect(String((error as Error).message)).toContain("--no-input");
   });
@@ -121,7 +142,7 @@ describe("selectOption raw TTY", () => {
     input.write("\r");
     input.end();
     await expect(pending).rejects.toThrow(
-      new CliInvocationError("choose an option from the list"),
+      new CliInvocationError("Choose one of the options in the list."),
     );
   });
 
@@ -212,6 +233,14 @@ const rawConfirmTerminal = () => {
 };
 
 describe("confirmAction raw TTY", () => {
+  // These assert rendered text, so colour must not split it into spans
+  // when the suite runs in a colour terminal.
+  let tone: ReturnType<typeof colorLevel>;
+  beforeEach(() => {
+    tone = colorLevel();
+    setToneLevel("off");
+  });
+  afterEach(() => setToneLevel(tone));
   test("a bare Enter confirms the default No choice", async () => {
     const { terminal, input } = rawConfirmTerminal();
     const pending = confirmAction("Publish?", { terminal });
@@ -267,9 +296,7 @@ describe("confirmAction raw TTY", () => {
     const pending = confirmAction("Publish?", { terminal });
     input.write("\u0003");
     input.end();
-    await expect(pending).rejects.toThrow(
-      new CliInvocationError("confirmation cancelled"),
-    );
+    await expect(pending).rejects.toThrow(new CliInvocationError("Cancelled."));
   });
 
   test("renders the boxed choices and leaves a decision record", async () => {
@@ -314,6 +341,14 @@ const rawSecretTerminal = () => {
 };
 
 describe("readTerminalSecret raw TTY", () => {
+  // These assert rendered text, so colour must not split it into spans
+  // when the suite runs in a colour terminal.
+  let tone: ReturnType<typeof colorLevel>;
+  beforeEach(() => {
+    tone = colorLevel();
+    setToneLevel("off");
+  });
+  afterEach(() => setToneLevel(tone));
   test("returns the typed secret and masks the input", async () => {
     const { terminal, input, outputText } = rawSecretTerminal();
     const pending = readTerminalSecret("Recovery Code", { terminal });
@@ -353,7 +388,7 @@ describe("readTerminalSecret raw TTY", () => {
     const pending = readTerminalSecret("Recovery Code", { terminal });
     input.write("\r");
     input.end();
-    await expect(pending).rejects.toThrow("must not be empty");
+    await expect(pending).rejects.toThrow("can't be empty");
   });
 
   test("Esc cancels the prompt", async () => {
@@ -361,9 +396,7 @@ describe("readTerminalSecret raw TTY", () => {
     const pending = readTerminalSecret("Recovery Code", { terminal });
     input.write("\u001b");
     input.end();
-    await expect(pending).rejects.toThrow(
-      new CliInvocationError("secret input cancelled"),
-    );
+    await expect(pending).rejects.toThrow(new CliInvocationError("Cancelled."));
   });
 
   test("Ctrl+C cancels the prompt", async () => {
@@ -371,9 +404,7 @@ describe("readTerminalSecret raw TTY", () => {
     const pending = readTerminalSecret("Recovery Code", { terminal });
     input.write("\u0003");
     input.end();
-    await expect(pending).rejects.toThrow(
-      new CliInvocationError("secret input cancelled"),
-    );
+    await expect(pending).rejects.toThrow(new CliInvocationError("Cancelled."));
   });
 });
 
@@ -391,7 +422,7 @@ describe("readTerminalSecret non-interactive channels", () => {
     input.write("K4ET-P7QN\n");
     input.end();
     expect(await pending).toBe("K4ET-P7QN");
-    expect(written).toContain("warning: stdin is not a terminal");
+    expect(written).toContain("stdin isn't a terminal");
   });
 
   test("an embedding prompt callback supplies the secret", async () => {
@@ -409,7 +440,7 @@ describe("readTerminalSecret non-interactive channels", () => {
       }),
     ).rejects.toThrow(
       new CliInvocationError(
-        "--no-input does not read secrets from the terminal; pass the value with a --*-file flag or pipe it to stdin",
+        "--no-input can't ask for a secret. Pass it in a file with the command's --*-file flag, or pipe it to stdin.",
       ),
     );
   });

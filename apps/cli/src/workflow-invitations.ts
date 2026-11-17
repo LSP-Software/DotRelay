@@ -39,13 +39,13 @@ export const resolveInvitationReference = (
   if (byTeam.length === 1 && only) return { kind: "listed", invitation: only };
   if (byTeam.length > 1)
     throw new CliInvocationError(
-      `several invitations match ${sanitizeCliLine(reference)}; pass one of these invitation ids: ${byTeam.map((invitation) => invitation.invitationId).join(", ")}`,
+      `More than one invitation matches ${sanitizeCliLine(reference)}. Pass one of these invitation ids instead: ${byTeam.map((invitation) => invitation.invitationId).join(", ")}.`,
     );
   if (uuidPattern.test(wanted))
     return { kind: "unlisted", invitationId: wanted };
   throw new CliError(
     "invocation",
-    `no pending invitation matches ${sanitizeCliLine(reference)}; run dotrelay team list to see your invitations`,
+    `No pending invitation matches ${sanitizeCliLine(reference)}. Run dotrelay team list to see your invitations.`,
     {},
     "resource_not_found",
   );
@@ -60,7 +60,7 @@ export const declineTeamInvitation = async (
   const reference = parsed.positionals[0];
   if (!reference)
     throw new CliInvocationError(
-      "team decline needs an invitation id or Team name; usage: dotrelay team decline <invitation-id-or-team>",
+      "Say which invitation to decline. Run dotrelay team decline <invitation-id-or-team>.",
     );
   const admin = adminClient(options);
   const pending = await listPendingTeamAccess(admin);
@@ -73,12 +73,12 @@ export const declineTeamInvitation = async (
   const label = team ? sanitizeCliLine(team.name) : invitationId;
   if (options.noInput && !options.force)
     throw new CliInvocationError(
-      "--no-input requires --force to confirm declining the invitation",
+      "With --no-input, add --force to confirm declining the invitation.",
     );
   if (!(options.noInput && options.force)) {
-    const question = `Decline the invitation to ${label}? A Team owner or admin would have to invite you again.`;
+    const question = `Decline the invitation to ${label}? A team owner or admin would have to invite you again.`;
     if (!(await confirmSilent(options, question)))
-      throw new CliInvocationError("declining the invitation was cancelled");
+      throw new CliInvocationError("Cancelled. The invitation is still open.");
   }
   try {
     await declineInvitation(admin, invitationId);
@@ -87,14 +87,14 @@ export const declineTeamInvitation = async (
     if (error.code === "resource_not_found")
       throw new CliError(
         "invocation",
-        "no pending invitation with that id is addressed to you; run dotrelay team list to see your invitations",
+        "You don't have a pending invitation with that id. Run dotrelay team list to see your invitations.",
         {},
         "resource_not_found",
       );
     if (error.code === "invitation_expired")
       throw new CliError(
         "conflict",
-        "this invitation can no longer be declined: it expired or was already accepted, declined, or revoked",
+        "This invitation can't be declined anymore. It expired, or it was already accepted, declined or revoked.",
         {},
         "invitation_expired",
       );

@@ -1,6 +1,6 @@
 import { CliInvocationError, sanitizeCliText } from "./errors";
 import { readTerminalLine, type TerminalIo } from "./terminal";
-import { bar, markLine } from "./components";
+import { bar, markLine, railText } from "./components";
 import {
   paint,
   type ReadableRaw,
@@ -35,7 +35,7 @@ export const createClassificationBoard = (
   initial: Readonly<Partial<Record<string, VariableClassification>>> = {},
 ): ClassificationBoardState => {
   if (names.length === 0)
-    throw new CliInvocationError("there are no Variables to classify");
+    throw new CliInvocationError("There are no new variables to sort.");
   return Object.freeze({
     drafts: Object.freeze(
       names.map((name) =>
@@ -85,7 +85,10 @@ export const renderClassificationBoard = (
   return [
     markLine("info", title),
     ...rows,
-    `${bar()}  ${paint("Team: teammates get it when they pull. Only me: each teammate sets their own.", "faint")}`,
+    railText(
+      "Team: teammates get it when they pull. Only me: each teammate sets their own.",
+      "faint",
+    ),
     `${bar()}  ${paint(hint, "ghost")}`,
     "",
   ].join("\n");
@@ -124,7 +127,7 @@ export const applyClassificationAction = (
     });
   const index = action === "toggle" ? state.cursor : action - 1;
   if (!Number.isInteger(index) || index < 0 || index >= state.drafts.length)
-    throw new CliInvocationError("choose a Variable from the list");
+    throw new CliInvocationError("Choose one of the variables in the list.");
   return Object.freeze({
     drafts: Object.freeze(
       state.drafts.map((draft, draftIndex) =>
@@ -151,15 +154,16 @@ const parseLineAction = (line: string): "done" | number => {
     return "done";
   const choice = Number.parseInt(trimmed, 10);
   if (!Number.isInteger(choice))
-    throw new CliInvocationError("enter a Variable number or press Enter");
+    throw new CliInvocationError(
+      "Enter a variable's number, or press Enter to continue.",
+    );
   return choice;
 };
 
 const keyAction = (
   key: string,
 ): "up" | "down" | "toggle" | "done" | "ignore" => {
-  if (key === "\u0003")
-    throw new CliInvocationError("classification cancelled");
+  if (key === "\u0003") throw new CliInvocationError("Cancelled.");
   if (key === "\r" || key === "\n") return "done";
   if (key === " " || key === "\t" || key === "h" || key === "l")
     return "toggle";

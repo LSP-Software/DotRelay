@@ -14,7 +14,7 @@ const PRIVATE_FILE = 0o600;
 const foreignOwner = (path: string): CliError =>
   new CliError(
     "local-io",
-    `${path} belongs to another user; DotRelay keeps keys in this directory and will not use it. Remove it or set DOTRELAY_CONFIG_DIR to a directory you own.`,
+    `${path} belongs to another user. DotRelay keeps keys here, so it won't use it. Remove it, or set DOTRELAY_CONFIG_DIR to a directory you own.`,
     {},
     "state_permissions_invalid",
   );
@@ -68,7 +68,7 @@ export const hardenLocalState = async (directory: string): Promise<void> => {
     if (error instanceof CliError) throw error;
     throw new CliError(
       "local-io",
-      `could not restrict the permissions of the DotRelay state directory ${directory}; check that you own it`,
+      `Couldn't make the DotRelay state directory ${directory} private. Check that you own it.`,
       {},
       "state_permissions_invalid",
     );

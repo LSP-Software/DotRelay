@@ -49,7 +49,7 @@ const inputPathKeys = (inputPath: string): ReadonlySet<string> =>
 const invalid = (): never => {
   throw new CliError(
     "local-io",
-    "the publication baseline record is invalid",
+    "this machine's record of which revision your file is based on is corrupt",
     {},
     "baseline_invalid",
   );
@@ -99,7 +99,7 @@ const readFileOrEmpty = async (path: string): Promise<BaselineFile> => {
     if (error instanceof CliError) throw error;
     throw new CliError(
       "local-io",
-      "could not read the publication baseline record",
+      "couldn't read this machine's record of which revision your file is based on",
       {},
       "baseline_read_failed",
     );
@@ -131,7 +131,7 @@ const LOCK_RETRY_MS = 20;
 const lockFailed = (): never => {
   throw new CliError(
     "local-io",
-    "another dotrelay process is updating the publication baseline record; try again",
+    "another dotrelay command is updating the same record. Try again when it finishes.",
     {},
     "baseline_write_failed",
   );
@@ -214,7 +214,7 @@ export const writePublicationBaseline = async (
     } catch {
       throw new CliError(
         "local-io",
-        "could not write the publication baseline record",
+        "couldn't save this machine's record of which revision your file is based on",
         {},
         "baseline_write_failed",
       );

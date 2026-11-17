@@ -35,10 +35,10 @@ type MembershipEntry = Readonly<{
 
 const statusLabel: Readonly<Record<AccountTrustStatus, string>> = {
   verified: "verified",
-  unverified: "unverified (no signed Device roster yet) — not trusted",
-  "identity-changed": "ACCOUNT KEY CHANGED — not trusted",
-  rollback: "ROSTER ROLLED BACK — not trusted",
-  invalid: "INVALID ROSTER — not trusted",
+  unverified: "unverified (no signed device roster yet), not trusted",
+  "identity-changed": "ACCOUNT KEY CHANGED, not trusted",
+  rollback: "DEVICE ROSTER ROLLED BACK, not trusted",
+  invalid: "INVALID DEVICE ROSTER, not trusted",
 };
 
 const loadTeamTrust = async (
@@ -52,7 +52,7 @@ const loadTeamTrust = async (
   const userId = session.boundary.session.userId;
   if (!teamId || !userId)
     throw new CliInvocationError(
-      "no Team is linked to this worktree; pass --team <team-id>",
+      "This worktree isn't linked to a team. Pass --team <team-id>.",
     );
   const listed = await createDeviceAdmin(options, session.deviceId).get(
     `/api/v1/teams/${teamId}/memberships`,
@@ -108,7 +108,10 @@ const loadTeamTrust = async (
           ? null
           : (() => {
               try {
-                return fromBase64(member.accountRoster, "Account roster");
+                return fromBase64(
+                  member.accountRoster,
+                  "member's signed device roster",
+                );
               } catch {
                 return new Uint8Array();
               }
@@ -159,7 +162,7 @@ export const listTeamMembers = async (
         row.status === "verified" && !row.self && !row.confirmed
           ? " · not confirmed"
           : ""
-      }${row.newlyPinned ? " · pinned now on first sight" : ""}`,
+      }${row.newlyPinned ? " · first time seen, pinned now" : ""}`,
       ...("fingerprint" in row ? [`  fingerprint ${row.fingerprint}`] : []),
     ].join("\n"),
   );
@@ -172,7 +175,7 @@ export const listTeamMembers = async (
     members: rows,
     message: `${lines.join("\n\n")}${
       blocked.length > 0 || unconfirmed.length > 0
-        ? "\n\nCompare a new or changed fingerprint with the Member out of band, then run dotrelay team trust <user-id>. Until then no Project key is taken from that Member."
+        ? "\n\nCompare any new or changed fingerprint with the member over another channel, then run dotrelay team trust <user-id>. Until you do, this device won't take a project key from that member."
         : ""
     }`,
   };
@@ -183,21 +186,24 @@ export const trustTeamMember = async (
   parsed: ParsedArguments,
 ) => {
   const targetUserId = parsed.positionals[0];
-  if (!targetUserId) throw new CliInvocationError("a User id is required");
+  if (!targetUserId)
+    throw new CliInvocationError(
+      "Say which member to trust. Run dotrelay team trust <user-id>.",
+    );
   const { userId, members, pins, resolution } = await loadTeamTrust(
     options,
     parsed,
   );
   if (targetUserId === userId)
     throw new CliInvocationError(
-      "your own account identity comes from your Account Master Key and cannot be re-trusted",
+      "Your own account identity comes from your account key, so there's nothing to trust.",
     );
   const trust = resolution.users.get(targetUserId);
   const member = members.find((entry) => entry.userId === targetUserId);
   if (!trust || !member)
     throw new CliError(
       "conflict",
-      "that User is not a Member of this Team",
+      "That user isn't a member of this team.",
       {},
       "resource_not_found",
     );
@@ -210,7 +216,7 @@ export const trustTeamMember = async (
       if (!trust.identity)
         throw new CliError(
           "crypto",
-          "the Member's account identity is unavailable",
+          "This member's account identity isn't available, so it can't be checked.",
           {},
           "trust_failed",
         );
@@ -223,7 +229,7 @@ export const trustTeamMember = async (
     return {
       userId: targetUserId,
       status: trust.status,
-      message: "This Member's account identity is already confirmed.",
+      message: "You've already confirmed this member's account identity.",
     };
   }
   if (
@@ -238,17 +244,17 @@ export const trustTeamMember = async (
       status: trust.status,
       message:
         trust.status === "rollback"
-          ? "This Member's Device list is older than the one already verified, or missing. There is nothing new to trust; ask the Member to run dotrelay pull, then check again."
-          : "This Member has no signed Device list to confirm yet.",
+          ? "This member's device roster is older than the one you already verified, or it's missing. There's nothing new to trust. Ask the member to run dotrelay pull, then check again."
+          : "This member has no signed device roster to confirm yet.",
     };
   let roster: Uint8Array;
   try {
-    roster = fromBase64(member.accountRoster, "Account roster");
+    roster = fromBase64(member.accountRoster, "member's signed device roster");
     readAccountDeviceRoster(roster);
   } catch {
     throw new CliError(
       "crypto",
-      "the Member's signed Device list is malformed",
+      "This member's signed device roster is malformed. Nothing was trusted.",
       {},
       "trust_failed",
     );
@@ -257,7 +263,7 @@ export const trustTeamMember = async (
   if (!identity)
     throw new CliError(
       "crypto",
-      "the Member's account identity is unavailable",
+      "This member's account identity isn't available, so it can't be checked.",
       {},
       "trust_failed",
     );
@@ -273,10 +279,10 @@ export const trustTeamMember = async (
       options,
       changed
         ? `Trust the new account fingerprint ${fingerprint} for ${targetUserId}?`
-        : `Confirm the account fingerprint ${fingerprint} for ${targetUserId}? Compare it with the one the Member's own dotrelay team members --fingerprints shows.`,
+        : `Confirm the account fingerprint ${fingerprint} for ${targetUserId}? Compare it with what dotrelay team members --fingerprints shows on the member's own machine.`,
     ))
   )
-    throw new CliInvocationError("re-trust was declined");
+    throw new CliInvocationError("You declined. Nothing was trusted.");
   let confirmed: Awaited<ReturnType<typeof confirmTeammateIdentity>>;
   try {
     confirmed = await confirmTeammateIdentity(pins, {
@@ -287,7 +293,7 @@ export const trustTeamMember = async (
   } catch {
     throw new CliError(
       "crypto",
-      "the Member's signed Device list does not verify under the account fingerprint shown",
+      "This member's signed device roster doesn't verify under the fingerprint shown. Nothing was trusted.",
       {},
       "trust_failed",
     );

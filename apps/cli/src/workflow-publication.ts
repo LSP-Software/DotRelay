@@ -109,7 +109,7 @@ export const classify = async (
     return classifyDotenv(entries, toDotenvClassifications(provided));
   if (options.noInput)
     throw new CliInvocationError(
-      "new Variables require --classify NAME=shared|user-defined under --no-input",
+      "with --no-input, new variables need --classify NAME=shared|user-defined (shared is Team, user-defined is Only me)",
     );
   const selected = await classifyVariablesInteractively(
     missing.map((entry) => entry.name),
@@ -167,7 +167,7 @@ export const variablesFromDotenv = (
         : ("USER_DEFINED_VALUE" as const);
     if (ownershipSource && ownershipSource.ownership !== ownership)
       throw new CliInvocationError(
-        `classification for ${entry.name} does not match the existing Variable`,
+        `${entry.name} already exists as ${ownershipSource.ownership === "SHARED_VALUE" ? "a Team" : "an Only me"} variable, so it can't be published as ${ownership === "SHARED_VALUE" ? "a Team" : "an Only me"} one`,
       );
     const variable = {
       id: prior?.id ?? crypto.randomUUID(),
@@ -319,8 +319,8 @@ const maskConflictValue = (
   unreadable: boolean,
 ): string => {
   if (unreadable)
-    return "changed on another Device; value not readable on this Device";
-  if (value === undefined) return "absent";
+    return "changed on another device, and this device can't read the new value";
+  if (value === undefined) return "not present";
   if (value === null) return "not set";
   return reveal ? sanitizeCliLine(value) : "••••";
 };
@@ -331,10 +331,10 @@ export const conflictLines = (
 ): readonly string[] => {
   const ownership =
     conflict.local?.ownership ?? conflict.remote?.ownership ?? "SHARED_VALUE";
-  const label = ownership === "SHARED_VALUE" ? "shared" : "user-defined";
+  const label = ownership === "SHARED_VALUE" ? "Team" : "Only me";
   return [
-    `${sanitizeCliLine(conflict.name)} (${label}) conflicts: ${conflict.kinds.join(", ")}`,
-    `  base: ${maskConflictValue(conflict.base?.tombstone ? undefined : conflict.base?.value, reveal, false)}`,
+    `${sanitizeCliLine(conflict.name)} (${label}) changed on both sides: ${conflict.kinds.join(", ")}`,
+    `  last pulled: ${maskConflictValue(conflict.base?.tombstone ? undefined : conflict.base?.value, reveal, false)}`,
     `  local: ${maskConflictValue(conflict.local?.tombstone ? undefined : conflict.local?.value, reveal, false)}`,
     `  remote: ${maskConflictValue(
       conflict.remote?.tombstone ? undefined : conflict.remote?.value,
@@ -342,7 +342,7 @@ export const conflictLines = (
       conflict.remoteUnreadable,
     )}`,
     conflict.otherUserOwned
-      ? "  This Value is owned by another User. The only choice is keep remote."
+      ? "  This value belongs to another member. The only choice is keep remote."
       : `  Choose ${conflict.choices.join(", ")}.`,
   ];
 };
@@ -374,7 +374,7 @@ const resolveConflicts = async (
   if (options.noInput)
     throw new CliError(
       "conflict",
-      `publication paused because ${names} changed both locally and on the Server Profile. Nothing was published and the input file is unchanged. Re-run without --no-input to choose which side to keep.`,
+      `publishing stopped because ${names} changed both in your file and on the server. Nothing was published and your file is unchanged. Run it again without --no-input to choose which side to keep.`,
       {
         conflictCount: conflicts.length,
         variableNames: names.slice(0, 512),
@@ -387,12 +387,12 @@ const resolveConflicts = async (
     output.write(`${conflictLines(conflict, parsed.reveal).join("\n")}\n`);
     const answer = await ask(
       options,
-      `Choose for ${sanitizeCliLine(conflict.name)} (${conflict.choices.join(" / ")})`,
+      `Which version of ${sanitizeCliLine(conflict.name)} should be kept? (${conflict.choices.join(" / ")})`,
     );
     const choice = normalizeResolution(answer, conflict.choices);
     if (!choice)
       throw new CliInvocationError(
-        `choose one of ${conflict.choices.join(", ")} for ${sanitizeCliLine(conflict.name)}`,
+        `answer ${conflict.choices.join(" or ")} for ${sanitizeCliLine(conflict.name)}`,
       );
     choices.set(conflict.key, choice);
   }
@@ -413,7 +413,7 @@ const hashFromHex = (hex: string): Uint8Array => {
  * because no Revision is recorded as the file's origin.
  */
 export const missingBaselineNotice = (inputPath: string): string =>
-  `${inputPath} has no Publication Baseline recorded by dotrelay pull on this machine (a new machine, cleared state, or a differently spelled path), so it is compared with the Environment as it is now and every Value in it that differs will replace the remote Value. If the file may be out of date, stop here and run dotrelay pull first.`;
+  `This machine has no record of pulling ${inputPath}. It may be a new machine, the local state was cleared, or the path is spelled differently. The file is compared with the environment as it is now, and every value in it that differs will replace the one on the server. If the file may be out of date, stop here and run dotrelay pull first.`;
 
 type PreparedPublicationBaseline = Readonly<{
   readonly snapshot: readonly DecodedVariable[];
@@ -453,7 +453,7 @@ export const preparePublicationBaseline = async (
   // guard until a pull records a real origin.
   const fallback = recorded?.origin === "fallback";
   const unverifiableNotice =
-    "The recorded Publication Baseline is no longer in verified history, so this publication is reconciled against the Environment as it is now.";
+    "The revision your file was pulled from is no longer in the verified history, so your file is compared with the environment as it is now.";
   const persistFallback = async (
     notice: string,
   ): Promise<PreparedPublicationBaseline> => {
@@ -613,7 +613,8 @@ export const publish = async (
     if (recovered)
       return {
         revision: recovered.revisionId,
-        message: "Original publication confirmed; no new Revision was created",
+        message:
+          "Your earlier publish already went through; no new revision was created",
       };
   } catch (error) {
     if (error instanceof PublicationJournalError)
@@ -626,14 +627,14 @@ export const publish = async (
     if (error instanceof PublicationTerminalError)
       throw new CliError(
         "conflict",
-        "The original publication expired or was cancelled without committing. Review and retry the command to create a new publication.",
+        "your earlier attempt to publish expired or was cancelled before it went through, so nothing was published. Check your changes and run the command again.",
         {},
         "staging_expired",
       );
     if (!(error instanceof PublicationUncertainError)) throw error;
     throw new CliError(
       "transient",
-      "The previous publication outcome is still unknown. Retry this command to reconcile the original operation before publishing again.",
+      "the server hasn't confirmed whether your earlier attempt to publish went through. Run this command again to check before you publish anything new.",
       {},
       "publication_uncertain",
     );
@@ -645,7 +646,7 @@ export const publish = async (
     if (!baselineStillVerifiable(synced.page, reconciliation))
       throw new CliError(
         "conflict",
-        "the recorded Publication Baseline is no longer in verified history. Nothing was published and the input file is unchanged. Run dotrelay pull, then try again.",
+        "the revision your file was pulled from is no longer in the verified history. Nothing was published and your file is unchanged. Run dotrelay pull, then try again.",
         {},
         "baseline_unverifiable",
       );
@@ -693,6 +694,8 @@ export const publish = async (
       revision: synced.page.currentHeadId,
       lanes: 0,
       tombstones: 0,
+      // JSON `message` status values stay stable for scripts; the human
+      // renderer capitalises them.
       message: "up to date, nothing to publish",
       ...pendingActionsField(synced.workflow.pendingActions),
     };
@@ -717,14 +720,14 @@ export const publish = async (
   )
     throw new CliError(
       "conflict",
-      `${reconciliation.inputPath ?? "the input file"} has no Publication Baseline recorded by dotrelay pull, so publishing it would replace or remove ${overwrittenCount} existing ${overwrittenCount === 1 ? "Value" : "Values"} that may be newer than the file. Nothing was published. Run dotrelay pull first, or re-run with --force to publish the file as it is.`,
+      `this machine has no record of pulling ${reconciliation.inputPath ?? "the input file"}, so publishing it would replace or remove ${overwrittenCount} existing ${overwrittenCount === 1 ? "value" : "values"} that may be newer than the file. Nothing was published. Run dotrelay pull first, or run it again with --force to publish the file as it is.`,
       { changedCount: overwrittenCount },
       "baseline_unverifiable",
     );
   if (options.noInput && removedCount > 0 && !options.force)
     throw new CliError(
       "invocation",
-      `publishing ${removedCount} removed ${removedCount === 1 ? "Variable" : "Variables"} requires explicit approval; re-run with --force`,
+      `publishing this would delete ${removedCount} ${removedCount === 1 ? "variable" : "variables"} from the environment. Nothing was published. Run it again with --force to approve the deletion.`,
       { changedCount: removedCount },
       "deletion_requires_approval",
     );
@@ -748,7 +751,9 @@ export const publish = async (
       });
       output.write(`${frame}\n`);
       if (!(await confirmSilent(options, rollbackConfirmQuestion())))
-        throw new CliInvocationError("rollback confirmation was declined");
+        throw new CliInvocationError(
+          "you didn't confirm, so nothing was rolled back",
+        );
     } else {
       const frame = reviewFrame({
         title: `Publish to ${environment}`,
@@ -757,7 +762,9 @@ export const publish = async (
       });
       output.write(`${frame}\n`);
       if (!(await confirmSilent(options, publicationConfirmQuestion())))
-        throw new CliInvocationError("publication confirmation was declined");
+        throw new CliInvocationError(
+          "you didn't confirm, so nothing was published",
+        );
     }
   }
   const progress: Progress = createProgress({
@@ -776,10 +783,8 @@ export const publish = async (
     throw new CliError(
       "invocation",
       sanitizeCliText(
-        error instanceof Error
-          ? error.message
-          : "could not build the publication",
-      ).slice(0, 512) || "could not build the publication",
+        error instanceof Error ? error.message : "couldn't prepare the changes",
+      ).slice(0, 512) || "couldn't prepare the changes",
       {},
       "publication_invalid",
     );
@@ -846,17 +851,17 @@ export const publish = async (
     throw new CliError(
       category,
       code === "stale_head"
-        ? "the Environment changed after this publication was reconciled. Nothing further was published. Run the command again to reconcile from the recorded baseline."
+        ? "the environment changed on the server after your changes were compared with it. Nothing more was published. Run the command again to compare them with the latest revision."
         : code === "authored_at_out_of_range"
           ? detailForProblem(code)
           : category === "conflict"
-            ? "the publication conflicts with current Server Profile state"
-            : `the Server Profile could not publish the Revision (${code})`,
+            ? "the server refused the push because it conflicts with the environment's current state. Run the command again."
+            : `the server couldn't save the new revision (${code}). Try again.`,
       {},
       code,
     );
   }
-  progress.done("Uploaded and finalized");
+  progress.done("Uploaded and saved on the server");
   await settleFallbackBaseline(options, reconciliation);
   return {
     revision: artifacts.request.revision.id,
@@ -977,7 +982,7 @@ export const shareEnvironmentWithPeerDevices = async (
       ? error
       : new CliError(
           "transient",
-          "could not share this Environment with your other Devices",
+          "couldn't share this environment with your other devices",
           {},
           "peer_share_failed",
         );
@@ -1013,11 +1018,11 @@ export const withOwnership = (
 
 export const trackedPullOutputDetail = (outputPath: string): string =>
   [
-    `${outputPath} is tracked by Git; the next git add/commit could publish the decrypted Values written to it.`,
-    "Choose one before re-running pull:",
-    `  1. Untrack it (keeps your local file): git rm --cached ${outputPath}`,
+    `${outputPath} is tracked by Git, so your next commit could include the decrypted values pulled into it. Nothing was written.`,
+    "Do one of these, then pull again:",
+    `  1. Untrack it and keep your local file: git rm --cached ${outputPath}`,
     "  2. Pull to a different path: dotrelay pull --output <path>",
-    "DotRelay never changes Git history or removes tracked content on your behalf.",
+    "DotRelay never changes your Git history or removes tracked files for you.",
   ].join("\n");
 
 /**
@@ -1037,7 +1042,7 @@ export const trackedInputWarning = async (
   } catch {
     return null;
   }
-  return `${inputPath} is tracked by Git, so the plaintext Values in it are in the repository. Untrack it with git rm --cached ${inputPath}, and rotate any Value that was committed.`;
+  return `${inputPath} is tracked by Git, so the plaintext values in it are in the repository. Untrack it with git rm --cached ${inputPath}, and change any value that was committed.`;
 };
 
 export const guardPullOutputAgainstGit = async (
@@ -1075,7 +1080,7 @@ export const guardPullOutputAgainstGit = async (
       if (verified.state !== "ignored" || temporary.state !== "ignored")
         throw new CliError(
           "local-io",
-          "Git did not honor the plaintext output exclusion",
+          "Git still doesn't ignore the output file after DotRelay added it to .git/info/exclude, so nothing was written",
           {},
           "git_exclusion_failed",
         );
@@ -1224,13 +1229,13 @@ export const resolveRollbackTarget = (
     const revision = page.revisions[Number.parseInt(ordinal[1], 10) - 1];
     if (!revision)
       throw new CliInvocationError(
-        `Revision ${trimmed} is not in the verified history; this Environment holds ${page.revisions.length} Revision${page.revisions.length === 1 ? "" : "s"}`,
+        `revision ${trimmed} isn't in the verified history. This environment has ${page.revisions.length} revision${page.revisions.length === 1 ? "" : "s"}.`,
       );
     return revision.id;
   }
   if (UUID_REFERENCE.test(trimmed)) return trimmed;
   throw new CliInvocationError(
-    `Rollback target ${trimmed} must be a Revision id or the ordinal dotrelay history shows for it`,
+    `${trimmed} isn't a revision. Use a revision id or the number dotrelay history shows for it.`,
   );
 };
 
@@ -1250,14 +1255,14 @@ export const resolveVariableReferences = (
         )
       )
         throw new CliInvocationError(
-          `rollback Variable ${trimmed} is not part of the live Manifest`,
+          `variable ${trimmed} isn't in the current revision`,
         );
       ids.push(trimmed.toLowerCase());
     } else {
       const matches = live.filter((variable) => variable.name === trimmed);
       if (matches.length === 0)
         throw new CliInvocationError(
-          `unknown Variable ${trimmed}; the live Manifest holds ${liveNames.join(", ") || "no Variables"}`,
+          `there's no variable called ${trimmed}. The current revision has ${liveNames.join(", ") || "no variables"}.`,
         );
       for (const variable of matches) ids.push(variable.id);
     }

@@ -39,7 +39,7 @@ export const cliDevice = (
       } catch {
         throw new CliError(
           "authentication",
-          "the active Device bundle is not available locally",
+          "The keys for this device are missing from this machine. Run dotrelay login to enroll it again.",
           {},
           "device_bundle_missing",
         );
@@ -49,7 +49,7 @@ export const cliDevice = (
       } catch {
         throw new CliError(
           "crypto",
-          "the active Device bundle is invalid",
+          "This device's saved keys are damaged, so DotRelay can't sign requests with them.",
           {},
           "device_bundle_invalid",
         );

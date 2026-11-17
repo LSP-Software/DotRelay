@@ -340,8 +340,10 @@ describe("logout revokes the session on the server", () => {
         },
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("Removed the local session for relay");
-      expect(result.stdout).toContain("was not revoked there");
+      expect(result.stdout).toContain(
+        "Removed the session for relay from this machine.",
+      );
+      expect(result.stdout).toContain("wasn't revoked there");
       expect(await createSessionStore(state.credentials).get(pin)).toBe(null);
     } finally {
       await state.cleanup();
@@ -470,7 +472,9 @@ describe("env list and env create", () => {
     try {
       const result = await run(["env", "list"], state.runtime);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("No Project is linked in this worktree");
+      expect(result.stderr).toContain(
+        "This repository isn't linked to a project yet",
+      );
     } finally {
       await state.cleanup();
     }
@@ -616,7 +620,7 @@ describe("run, export, and list read the Environment without writing", () => {
       expect(refused.stderr).toContain("--reveal");
       const listed = await run(["list", "--profile", "relay"], state.runtime);
       expect(listed.exitCode).toBe(0);
-      expect(listed.stdout).toContain("no Variables yet");
+      expect(listed.stdout).toContain("This environment has no variables yet");
     } finally {
       server.stop();
       await state.cleanup();
@@ -742,7 +746,7 @@ describe("Project discovery explains pending access", () => {
           code: "membership_pending",
           category: "authentication",
         });
-        expect(String(diagnostic.detail)).toContain("you joined Platform");
+        expect(String(diagnostic.detail)).toContain("You joined Platform");
         expect(String(diagnostic.detail)).toContain("Share project keys");
       }
       // Nothing was created on the Member's behalf.
@@ -1030,7 +1034,9 @@ describe("team share-keys", () => {
         { ...state.runtime, admin },
       );
       expect(missing.exitCode).toBe(2);
-      expect(missing.stderr).toContain("is not a Member of this Team");
+      expect(missing.stderr).toContain(
+        '"someone" isn\'t a member of this team',
+      );
     } finally {
       await state.cleanup();
     }
@@ -1181,7 +1187,7 @@ describe("team decline", () => {
       });
       expect(result.exitCode).toBe(2);
       expect(questions).toEqual([
-        "Decline the invitation to Payments? A Team owner or admin would have to invite you again.",
+        "Decline the invitation to Payments? A team owner or admin would have to invite you again.",
       ]);
       expect(declinePosts(server.requests)).toHaveLength(0);
     } finally {
@@ -1212,7 +1218,7 @@ describe("team decline", () => {
       expect(result.exitCode).toBe(4);
       expect(JSON.parse(result.stderr)).toMatchObject({
         code: "invitation_expired",
-        detail: expect.stringContaining("can no longer be declined"),
+        detail: expect.stringContaining("can't be declined anymore"),
       });
     } finally {
       server.stop();
@@ -1240,7 +1246,9 @@ describe("team decline", () => {
         state.runtime,
       );
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("No pending invitation with that id");
+      expect(result.stderr).toContain(
+        "You don't have a pending invitation with that id",
+      );
       expect(declinePosts(server.requests).map((r) => r.path)).toEqual([
         `/api/v1/invitations/${unlisted}/decline`,
       ]);
@@ -1331,7 +1339,7 @@ describe("status reports an owed Project key rotation", () => {
         nextAction: "none",
         rotationOwed,
         rotationOwedNotice: expect.stringContaining(
-          "1 Member removed since 2026-11-01",
+          "1 member removed since 2026-11-01",
         ),
       });
       const human = await run(["status"], state.runtime);
@@ -1606,7 +1614,7 @@ describe("team leave and account lifecycle", () => {
         },
       });
       expect(result.exitCode).toBe(0);
-      expect(questions[0]).toContain("You leave: Payments.");
+      expect(questions[0]).toContain("You'll leave: Payments.");
       expect(JSON.parse(result.stdout)).toMatchObject({
         ok: true,
         status: "DELETED",
@@ -1708,7 +1716,7 @@ describe("team leave and account lifecycle", () => {
       expect(result.exitCode).toBe(6);
       expect(JSON.parse(result.stderr)).toMatchObject({
         code: "device_not_active",
-        detail: expect.stringContaining("still has an active Device"),
+        detail: expect.stringContaining("still has an active device"),
       });
     } finally {
       server.stop();
@@ -1784,7 +1792,12 @@ describe("guided runs offer the fix and carry on", () => {
       expect(result.exitCode).toBe(0);
       expect(questions).toEqual(["Try again?"]);
       expect(captured.text()).toContain("Couldn't reach");
-      expect(captured.text()).toContain("Nothing was changed.");
+      // A dropped request may have reached the server, so the guidance no
+      // longer promises that nothing changed.
+      expect(captured.text()).toContain(
+        "Check your connection, then try again.",
+      );
+      expect(captured.text()).not.toContain("Nothing was changed");
       expect(result.stdout).toContain("Platform");
       // The resumed run doesn't open a second rail.
       expect(result.stdout.match(/┌ {2}dotrelay team list/g)).toHaveLength(1);

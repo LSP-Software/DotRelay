@@ -134,32 +134,32 @@ describe("local dotenv parsing", () => {
 
   test("reports malformed assignments with line and column diagnostics", () => {
     expect(() => parseDotenv("  not an assignment")).toThrow(
-      /invalid dotenv assignment on line 1, column 3/,
+      /line 1, column 3 isn't a NAME=value assignment/,
     );
     expect(() => parseDotenv("A=x\rB=y")).toThrow(
-      /stray carriage return; use LF or CRLF line endings/,
+      /stray carriage return. Save the file with LF or CRLF line endings/,
     );
     expect(() => parseDotenv("A=x\r")).toThrow(
-      /stray carriage return; use LF or CRLF line endings/,
+      /stray carriage return. Save the file with LF or CRLF line endings/,
     );
     expect(() => parseDotenv("A=x\r \nB=y")).toThrow(
-      /stray carriage return; use LF or CRLF line endings/,
+      /stray carriage return. Save the file with LF or CRLF line endings/,
     );
     expect(() => parseDotenv('A="x\r"')).toThrow(
-      /stray carriage return; use LF or CRLF line endings/,
+      /stray carriage return. Save the file with LF or CRLF line endings/,
     );
     expect(() => parseDotenv("VALUE=one\nVALUE=two")).toThrow(
-      /duplicate dotenv Variable: VALUE on line 2/,
+      /VALUE is set twice. The duplicate is on line 2/,
     );
   });
 
   test("reports unterminated and trailing quoted syntax with line and column diagnostics", () => {
     expect(() => parseDotenv('A="x\nmore')).toThrow(
-      /unterminated double-quoted dotenv value for A starting on line 1, column 3/,
+      /the double quote that opens A on line 1, column 3 is never closed/,
     );
     expect(() => parseDotenv("A='x\nmore'")).not.toThrow();
     expect(() => parseDotenv('A="x" tail')).toThrow(
-      /unexpected content after the closing quote of A on line 1, column 7/,
+      /extra text after the closing quote of A on line 1, column 7/,
     );
   });
 
@@ -175,19 +175,19 @@ describe("local dotenv parsing", () => {
 
   test("names the file in parse errors when the caller gives it", () => {
     expect(() => parseDotenv("BAD-NAME=value", "/tmp/app/.env")).toThrow(
-      /^\/tmp\/app\/\.env: invalid dotenv assignment on line 1, column 1$/,
+      /^\/tmp\/app\/\.env: line 1, column 1 isn't a NAME=value assignment$/,
     );
     expect(() => parseDotenv("BAD-NAME=value")).toThrow(
-      /^invalid dotenv assignment/,
+      /^line 1, column 1 isn't a NAME=value/,
     );
   });
 
   test("rejects malformed and duplicate variables", () => {
     expect(() => parseDotenv("BAD-NAME=value")).toThrow();
-    expect(() => parseDotenv("VALUE=one\nVALUE=two")).toThrow("duplicate");
+    expect(() => parseDotenv("VALUE=one\nVALUE=two")).toThrow("set twice");
     expect(() =>
       classifyDotenv([{ name: "constructor", value: "" }], {}),
-    ).toThrow("classification is required");
+    ).toThrow("needs to be marked Team or Only me");
   });
 
   test("summarizes classifications without exposing values", () => {
@@ -384,14 +384,14 @@ describe("serializeDotenv safety", () => {
 
   test("rejects invalid and duplicate names", () => {
     expect(() => serializeDotenv([{ name: "1A", value: "" }])).toThrow(
-      /names must match/,
+      /Names must match/,
     );
     expect(() =>
       serializeDotenv([
         { name: "A", value: "1" },
         { name: "A", value: "2" },
       ]),
-    ).toThrow(/duplicate/);
+    ).toThrow(/twice/);
   });
 
   test("round-trips U+2028 and U+2029", () => {

@@ -30,14 +30,14 @@ export const bootstrapProjectGrant = async (
   if (!boundary.environment.projectId || !boundary.environment.teamId)
     throw new CliError(
       "conflict",
-      "the selected Environment has no Project epoch context",
+      "the server didn't send the project details for this environment, so this device can't set up the project key",
       {},
       "environment_context_missing",
     );
   if (!keys.encryptionPublicKey)
     throw new CliError(
       "crypto",
-      "the Device encryption key is unavailable",
+      "this device's encryption key is missing",
       {},
       "device_bundle_invalid",
     );
@@ -107,7 +107,7 @@ export const wrapEpochKeyToPeers = async (
         // The peer is another of this User's own Devices (the service lists
         // no one else's); that Device can still read the key from the
         // account key once it is unlocked.
-        `Device ${peer.id} is missing the Project epoch grant, and this Device could not share it with that Device of yours. On that Device, run dotrelay device recover if it is locked, then dotrelay pull. If it still cannot read the Project, a Team owner or admin can share the Project keys with you from the Members view of the DotRelay web app ("Share project keys").`,
+        `Your device ${peer.id} doesn't have the project key yet, and this device couldn't share it. On that device, run dotrelay device recover if it's locked, then dotrelay pull. If it still can't read the project, a team owner or admin can share the project keys with you from the Members view in the DotRelay web app ("Share project keys").`,
       );
     }
   }
@@ -160,7 +160,7 @@ const submitEpochGrant = async (
     if (error instanceof NetworkAttemptError)
       throw networkFailureCliError(
         error,
-        "the Project grant endpoint",
+        `the server at ${options.profile.origin}`,
         "grant_bootstrap_unavailable",
       );
     throw error;
@@ -175,7 +175,7 @@ const submitEpochGrant = async (
         : code === "invalid_crypto_object"
           ? "crypto"
           : "authentication",
-      "Project epoch grant bootstrap was rejected",
+      "the server refused to store the project key for this device",
       {},
       code,
     );

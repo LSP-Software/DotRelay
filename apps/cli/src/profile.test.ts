@@ -144,7 +144,7 @@ describe("CLI Server Profile catalog", () => {
       code: "capabilities_unavailable",
     });
     expect(String((error as Error).message)).toContain(
-      "could not reach the Server Profile capabilities endpoint at https://relay.example after 3 attempts",
+      "could not reach the server at https://relay.example after 3 attempts",
     );
     expect(calls).toBe(3);
   });
@@ -385,7 +385,7 @@ describe("CLI Server Profile catalog", () => {
         },
       }),
     ).rejects.toThrow(
-      "no Server Profile is selected; run dotrelay setup https://api.dotrelay.dev (or your own origin if you self-host)",
+      "you haven't picked a server yet. Run dotrelay setup https://api.dotrelay.dev (or your own origin if you self-host).",
     );
   });
 
@@ -402,7 +402,7 @@ describe("CLI Server Profile catalog", () => {
           fetch: async () => Response.json(capabilities),
           confirm: async () => false,
         }),
-      ).rejects.toThrow("confirmation");
+      ).rejects.toThrow("you didn't confirm the server");
       expect((await store.read()).profiles).toEqual([]);
     } finally {
       await (
@@ -445,14 +445,14 @@ describe("CLI Server Profile catalog", () => {
           catalogContents: async () => Bun.file(path).text(),
           backupCatalog: async () => `${directory}/unused.json`,
         }),
-      ).rejects.toThrow("declined");
+      ).rejects.toThrow("you didn't approve the rebind");
       expect((await store.read()).profiles[0]?.origin).toBe(current.origin);
       const rebound = await rebindServerProfile(store, "work", moved.origin, {
         fetch: async () => Response.json(moved),
         approve: async (statement) => {
-          expect(statement).toContain("was origin https://relay.example");
-          expect(statement).toContain("origin https://moved.example");
-          expect(statement).toContain("Device keys are preserved");
+          expect(statement).toContain("instead of https://relay.example");
+          expect(statement).toContain("Trust work at https://moved.example");
+          expect(statement).toContain("Your device keys are kept");
           return true;
         },
         catalogContents: async () => Bun.file(path).text(),

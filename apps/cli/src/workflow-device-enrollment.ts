@@ -108,7 +108,7 @@ const postBootstrap = async (
     if (error instanceof NetworkAttemptError)
       throw networkFailureCliError(
         error,
-        "the Device enrollment endpoint",
+        `the server at ${options.profile.origin}`,
         "device_enrollment_unavailable",
       );
     throw error;
@@ -119,7 +119,7 @@ const postBootstrap = async (
       typeof body?.code === "string" ? body.code : "device_enrollment_failed";
     throw new CliError(
       categoryForProblem(code),
-      "Device enrollment was rejected",
+      "The server refused to enroll this device.",
       {},
       code,
     );
@@ -153,7 +153,7 @@ const artifactObject = async (
     if (source.byteLength > 8 * 1024 * 1024)
       throw new CliError(
         "local-io",
-        "the Device handoff file is too large",
+        "The enrollment request file is too large. Check that you passed the right file.",
         {},
         "artifact_too_large",
       );
@@ -164,7 +164,7 @@ const artifactObject = async (
     if (error instanceof CliError) throw error;
     throw new CliError(
       "local-io",
-      "could not read the Device handoff file",
+      "Couldn't read the enrollment request file. Check the path, and that the file is the JSON dotrelay device enroll wrote.",
       {},
       "artifact_read_failed",
     );
@@ -186,7 +186,7 @@ const readEnrollmentArtifact = async (
   )
     throw new CliError(
       "crypto",
-      "the enrollment handoff file has an unsupported format",
+      "The enrollment request file isn't in a format this CLI supports.",
       {},
       "artifact_invalid",
     );
@@ -198,7 +198,7 @@ const readEnrollmentArtifact = async (
   )
     throw new CliError(
       "crypto",
-      "the enrollment handoff has an invalid identity generation",
+      "The enrollment request file is damaged. Its identity generation isn't valid.",
       {},
       "artifact_invalid",
     );
@@ -240,7 +240,7 @@ export const enrollFirstDevice = async (
   if (!token)
     throw new CliError(
       "authentication",
-      "login is required before Device enrollment",
+      "Sign in before you enroll this device. Run dotrelay login.",
       {},
       "authentication_required",
     );
@@ -261,7 +261,7 @@ export const enrollFirstDevice = async (
     if (!isRecord(session.user))
       throw new CliError(
         "authentication",
-        "the Server Profile returned no User identity",
+        "The server didn't say which user you're signed in as. Run dotrelay login to sign in again.",
         {},
         "session_invalid",
       );
@@ -273,7 +273,7 @@ export const enrollFirstDevice = async (
         options,
         boundary,
         localDeviceId,
-        "the local Device is not active on this Server Profile; run dotrelay device enroll or dotrelay device recover",
+        "This machine's device isn't active on this server. Run dotrelay device enroll or dotrelay device recover.",
       );
       return {
         deviceId: localDeviceId,
@@ -302,11 +302,11 @@ export const enrollFirstDevice = async (
   if (!isRecord(session.user))
     throw new CliError(
       "authentication",
-      "the Server Profile returned no User identity",
+      "The server didn't say which user you're signed in as. Run dotrelay login to sign in again.",
       {},
       "session_invalid",
     );
-  const userId = requiredString(session.user.id, "User id");
+  const userId = requiredString(session.user.id, "user id");
   const bootstrap = await createDeviceBootstrap({
     pin: options.profile.pin,
     userId,
@@ -420,7 +420,7 @@ const requestForApproval = async (
   );
   const initiatorSigningPublicKey = fromBase64(
     artifact.initiatorSigningPublicKey,
-    "initiator signing public key",
+    "new device's signing key",
   );
   const transcript = await parseDeviceEnrollmentTranscript(
     transcriptBytes,
@@ -434,7 +434,7 @@ const requestForApproval = async (
   )
     throw new CliError(
       "crypto",
-      "the enrollment handoff is bound to a different identity",
+      "The enrollment request doesn't match the user, device or server it names. Nothing was approved.",
       {},
       "enrollment_binding_mismatch",
     );
@@ -442,7 +442,7 @@ const requestForApproval = async (
   if (sha384ToHex(transcriptHash) !== artifact.transcriptHash.toLowerCase())
     throw new CliError(
       "crypto",
-      "the enrollment handoff transcript hash is invalid",
+      "The enrollment request's hash doesn't match its contents. Nothing was approved.",
       {},
       "enrollment_binding_mismatch",
     );
@@ -463,7 +463,7 @@ const requestForApproval = async (
       bundle: undefined as never,
       keyMaterial: undefined as never,
       initiatorSigningPublicKey,
-      certificateBytes: fromBase64(artifact.certificate, "Device certificate"),
+      certificateBytes: fromBase64(artifact.certificate, "device certificate"),
     } as DeviceEnrollmentRequest,
   };
 };
@@ -488,7 +488,7 @@ export const beginDeviceEnrollment = async (
   if (!token)
     throw new CliError(
       "authentication",
-      "login is required before Device enrollment",
+      "Sign in before you enroll this device. Run dotrelay login.",
       {},
       "authentication_required",
     );
@@ -504,11 +504,11 @@ export const beginDeviceEnrollment = async (
   if (!isRecord(session.user))
     throw new CliError(
       "authentication",
-      "the Server Profile returned no User identity",
+      "The server didn't say which user you're signed in as. Run dotrelay login to sign in again.",
       {},
       "session_invalid",
     );
-  const userId = requiredString(session.user.id, "User id");
+  const userId = requiredString(session.user.id, "user id");
   const deviceId = crypto.randomUUID();
   const encryption = await generateEncryptionKeyPair();
   const signing = await generateSigningKeyPair();
@@ -590,7 +590,7 @@ export const beginDeviceEnrollment = async (
     if (error instanceof NetworkAttemptError)
       throw networkFailureCliError(
         error,
-        "the Device enrollment endpoint",
+        `the server at ${options.profile.origin}`,
         "device_enrollment_unavailable",
       );
     throw error;
@@ -601,7 +601,7 @@ export const beginDeviceEnrollment = async (
       typeof body?.code === "string" ? body.code : "device_enrollment_failed";
     throw new CliError(
       categoryForProblem(code),
-      "Device enrollment was rejected",
+      "The server refused to enroll this device.",
       {},
       code,
     );
@@ -647,7 +647,7 @@ export const approveDeviceEnrollment = async (
   )
     throw new CliError(
       "authentication",
-      "the enrollment handoff belongs to another Server Profile",
+      "This enrollment request was made for a different server. Nothing was changed.",
       {},
       "profile_mismatch",
     );
@@ -655,7 +655,7 @@ export const approveDeviceEnrollment = async (
   if (artifact.userId.toLowerCase() !== authorized.userId.toLowerCase())
     throw new CliError(
       "authentication",
-      "the enrollment handoff belongs to another User",
+      "This enrollment request was made by a different user. Nothing was approved.",
       {},
       "user_mismatch",
     );
@@ -663,7 +663,7 @@ export const approveDeviceEnrollment = async (
     if (error instanceof CliError) throw error;
     throw new CliError(
       "crypto",
-      "the enrollment handoff could not be verified",
+      "Couldn't verify the enrollment request. Nothing was approved.",
       {},
       "enrollment_binding_mismatch",
     );
@@ -686,7 +686,7 @@ export const approveDeviceEnrollment = async (
       // it.
       certificateObjectId: artifact.certificateObjectId,
       certificateObject: base64(
-        fromBase64(artifact.certificate, "Device certificate"),
+        fromBase64(artifact.certificate, "device certificate"),
       ),
     },
     ["approved", "idempotent"],
@@ -743,8 +743,8 @@ export const approveDeviceEnrollment = async (
     deviceId: artifact.deviceId,
     approved: true,
     message: listed
-      ? "the new Device is approved and listed in your signed Device list; send it the account key with dotrelay device transfer"
-      : "the new Device is approved. This Device holds no account key, so the new Device joins your signed Device list once it is unlocked",
+      ? "Approved the new device and added it to your signed device roster. Send it the account key with dotrelay device transfer."
+      : "Approved the new device. This device doesn't hold the account key, so the new device joins your signed device roster once it has the account key.",
   };
 };
 
@@ -766,7 +766,7 @@ export const completeDeviceEnrollment = async (
   )
     throw new CliError(
       "authentication",
-      "the enrollment handoff belongs to another Server Profile",
+      "This enrollment request was made for a different server. Nothing was changed.",
       {},
       "profile_mismatch",
     );
@@ -778,16 +778,13 @@ export const completeDeviceEnrollment = async (
   )
     throw new CliError(
       "authentication",
-      "this Device cannot complete the enrollment handoff",
+      "This device didn't start this enrollment, so it can't complete it. Run the command on the device that made the request.",
       {},
       "device_mismatch",
     );
   const transcript = await parseDeviceEnrollmentTranscript(
     fromBase64(artifact.transcript, "enrollment transcript"),
-    fromBase64(
-      artifact.initiatorSigningPublicKey,
-      "initiator signing public key",
-    ),
+    fromBase64(artifact.initiatorSigningPublicKey, "new device's signing key"),
   );
   if (
     transcript.enrollmentId !== artifact.enrollmentId.toLowerCase() ||
@@ -795,13 +792,13 @@ export const completeDeviceEnrollment = async (
   )
     throw new CliError(
       "crypto",
-      "the enrollment handoff is invalid",
+      "The enrollment request is damaged. Its ids don't match its signed contents.",
       {},
       "enrollment_binding_mismatch",
     );
   const certificateBytes = fromBase64(
     artifact.certificate,
-    "Device certificate",
+    "device certificate",
   );
   const certificate = parseProtocolObject(certificateBytes);
   if (
@@ -810,7 +807,7 @@ export const completeDeviceEnrollment = async (
   )
     throw new CliError(
       "crypto",
-      "the enrollment certificate is invalid",
+      "The device certificate in the enrollment request isn't valid.",
       {},
       "enrollment_certificate_invalid",
     );
@@ -823,7 +820,7 @@ export const completeDeviceEnrollment = async (
   if (!keys.encryptionPublicKey || !keys.signingPublicKey)
     throw new CliError(
       "crypto",
-      "the pending Device bundle has no public key material",
+      "This device's saved keys are incomplete. The public keys are missing.",
       {},
       "device_bundle_invalid",
     );
@@ -851,7 +848,7 @@ export const completeDeviceEnrollment = async (
   )
     throw new CliError(
       "crypto",
-      "the enrollment certificate does not match the pending Device",
+      "The device certificate in the enrollment request doesn't match this device's keys.",
       {},
       "enrollment_certificate_invalid",
     );
@@ -863,7 +860,7 @@ export const completeDeviceEnrollment = async (
   } catch {
     throw new CliError(
       "crypto",
-      "the enrollment certificate signature is invalid",
+      "The device certificate's signature doesn't verify.",
       {},
       "enrollment_certificate_invalid",
     );

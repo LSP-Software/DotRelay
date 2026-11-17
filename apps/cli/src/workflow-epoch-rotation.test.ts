@@ -273,7 +273,7 @@ describe("rotationTransportFailure", () => {
     expect(diagnostic.code).toBe("membership_not_active");
     expect(diagnostic.exitCode).toBe(EXIT_CODES.conflict);
     expect(diagnostic.detail).toContain(
-      "Membership in this Team is not active",
+      "Your membership in this team isn't active yet",
     );
   });
 
@@ -284,7 +284,7 @@ describe("rotationTransportFailure", () => {
     expect(error.category).toBe("conflict");
     expect(error.code).toBe("stale_epoch");
     expect(error.message).toContain(
-      "the project epoch changed before this rotation landed",
+      "the project's keys changed before this rotation reached the server",
     );
     expect(diagnosticForError(error).exitCode).toBe(EXIT_CODES.conflict);
   });

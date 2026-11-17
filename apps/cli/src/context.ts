@@ -130,7 +130,7 @@ export const sameGitHubIdentity = (
 const repositoryMissing = (): CliError =>
   new CliError(
     "invocation",
-    "no GitHub repository remote was found",
+    "none of this repository's Git remotes point at GitHub",
     {},
     "repository_missing",
   );
@@ -185,8 +185,8 @@ export const selectGitHubRepository = async (
     const known = remotes.some((remote) => remote.name === remoteName);
     throw new CliInvocationError(
       known
-        ? `the specified remote is not a GitHub remote`
-        : `the specified remote was not found`,
+        ? `the remote ${remoteName} doesn't point at a GitHub repository`
+        : `there's no Git remote called ${remoteName}`,
     );
   }
   const saved = options.saved;
@@ -218,12 +218,12 @@ export const selectGitHubRepository = async (
       "invocation",
       `${
         identities.size === 1 && choiceDiscarded
-          ? "the recorded repository choice no longer matches the Git remotes; "
-          : "GitHub repository remotes are ambiguous; "
-      }pass --remote <remote-name> with one of:\n${matches
+          ? "the remote you picked before no longer points at the same repository. "
+          : "your Git remotes point at more than one GitHub repository. "
+      }Pass --remote <remote-name> with one of:\n${matches
         .map(
           ({ remote, owner, name }, index) =>
-            `${index + 1}. ${remote.name} — ${owner}/${name}`,
+            `${index + 1}. ${remote.name} (${owner}/${name})`,
         )
         .join("\n")}`,
       {},
@@ -232,10 +232,10 @@ export const selectGitHubRepository = async (
   // The listing shows remote names and repository names only; remote URLs
   // may carry credentials and are never shown or stored.
   const selectedId = await selectOption(
-    "GitHub Repository",
+    "GitHub repository",
     matches.map((match) => ({
       id: match.remote.name,
-      label: `${match.remote.name} — ${match.owner}/${match.name}`,
+      label: `${match.remote.name} (${match.owner}/${match.name})`,
     })),
     {
       ...(options.terminal ? { terminal: options.terminal } : {}),
@@ -244,7 +244,7 @@ export const selectGitHubRepository = async (
     },
   );
   const match = matches.find((entry) => entry.remote.name === selectedId);
-  if (!match) throw new CliInvocationError("choose a remote from the list");
+  if (!match) throw new CliInvocationError("pick one of the listed remotes");
   return choose(match, "interactive");
 };
 
@@ -261,7 +261,7 @@ export const detectGitHubRepository = (
   if (identities.size !== 1)
     throw new CliError(
       "invocation",
-      "GitHub repository remotes are ambiguous; choose one explicitly",
+      "your Git remotes point at more than one GitHub repository. Pass --remote <remote-name> to pick one.",
       {},
       "repository_ambiguous",
     );
@@ -316,25 +316,27 @@ export const readStoredWorktreeContext = async (
 
 const validateContext = (value: unknown): WorktreeContext => {
   if (value === null || typeof value !== "object" || Array.isArray(value))
-    throw new CliInvocationError("worktree context is invalid");
+    throw new CliInvocationError(
+      "the saved context for this worktree is corrupt",
+    );
   const object = value as Record<string, unknown>;
   const keys = Object.keys(object).sort();
   if (!keys.length || !keys.every((key) => contextKeys.has(key)))
     throw new CliInvocationError(
-      "worktree context must contain only opaque ids",
+      "the saved context for this worktree has fields it shouldn't",
     );
   // The three repository identifiers are written as a unit; a partial
   // choice cannot be trusted to name one remote's identity.
   const choiceKeys = keys.filter((key) => repositoryChoiceKeys.has(key));
   if (choiceKeys.length !== 0 && choiceKeys.length !== 3)
     throw new CliInvocationError(
-      "worktree context must contain only opaque ids",
+      "the saved context for this worktree has fields it shouldn't",
     );
   // A verified Repository Identity only means anything bound to a complete
   // choice; it is never trusted on its own.
   if (keys.includes("repositoryIdentity") && choiceKeys.length !== 3)
     throw new CliInvocationError(
-      "worktree context must contain only opaque ids",
+      "the saved context for this worktree has fields it shouldn't",
     );
   // Navigation (Project and Environment) can be cleared without dropping the
   // Server Profile pin or a complete repository choice. An Environment still
@@ -349,7 +351,7 @@ const validateContext = (value: unknown): WorktreeContext => {
     (!hasChoice && !hasProfile)
   )
     throw new CliInvocationError(
-      "worktree context must contain only opaque ids",
+      "the saved context for this worktree has fields it shouldn't",
     );
   if (
     keys.some((key) => {
@@ -361,7 +363,7 @@ const validateContext = (value: unknown): WorktreeContext => {
     })
   )
     throw new CliInvocationError(
-      "worktree context contains an invalid opaque id",
+      "the saved context for this worktree has an id that isn't valid",
     );
   return Object.freeze({
     ...(object.serverProfileId === undefined
@@ -398,7 +400,7 @@ export const writeWorktreeContext = async (
   } catch {
     throw new CliError(
       "local-io",
-      "could not write worktree context",
+      "couldn't save the context for this worktree",
       {},
       "context_write_failed",
     );
@@ -416,7 +418,7 @@ export const readWorktreeContext = async (
     if (error instanceof CliInvocationError) throw error;
     throw new CliError(
       "local-io",
-      "could not read worktree context",
+      "couldn't read the saved context for this worktree",
       {},
       "context_read_failed",
     );

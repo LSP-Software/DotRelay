@@ -330,7 +330,7 @@ export const errorCard = ({
 }: ErrorCard): string =>
   [
     markLine("danger", bold(title, "danger")),
-    railText(detail, "fg"),
+    ...(detail.length > 0 ? [railText(detail, "fg")] : []),
     ...fixes.map((fix) => railText(fix, "muted")),
     ...(next
       ? [

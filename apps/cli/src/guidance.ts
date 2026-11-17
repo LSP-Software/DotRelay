@@ -163,7 +163,7 @@ export const guidanceFor = (
       return {
         title: "This repository isn't linked to a project you can access",
         explain:
-          "If a teammate already published it, ask a team owner or admin to invite you and share the project keys. To publish this repo's .env as a new project yourself, run init.",
+          "If a teammate already published it, ask a team owner or admin to invite you and share the project keys. To publish this repo's .env as a new project yourself, run dotrelay init.",
         next: "dotrelay init",
         ...(command === "pull" || command === "diff" || command === "run"
           ? {
@@ -182,6 +182,21 @@ export const guidanceFor = (
       // The detail names the Team and the exact steps, so it is shown
       // instead of a general explanation.
       return { title: "Waiting for a teammate to share the project keys" };
+    // The publish may already have landed. Running the command again checks
+    // the earlier attempt before it publishes anything new, so a retry is
+    // safe; "nothing changed" would not be.
+    case "publication_uncertain":
+      return {
+        title: "Not sure whether your publish went through",
+        explain:
+          "The connection dropped before the server confirmed it. Running the command again checks the earlier attempt before it publishes anything new.",
+        offer: {
+          question: "Check and try again?",
+          accept: "Check",
+          fix: { kind: "retry" },
+          resume: true,
+        },
+      };
     case "rate_limited":
       return { title: `${host} is rate-limiting requests` };
     case "repository_missing":
@@ -201,7 +216,14 @@ export const guidanceFor = (
           : code === "request_failed"
             ? `${host} couldn't finish the request`
             : `Couldn't reach ${host}`,
-      explain: "Nothing was changed. Try again once the connection is back.",
+      // The request may have failed after the server acted on it, so the
+      // copy promises nothing about what changed.
+      explain:
+        code === "github_unavailable"
+          ? "Projects that are already linked still sync. Try again once GitHub is back."
+          : code === "service_unavailable"
+            ? "Check your connection, then try again."
+            : "Try again in a moment.",
       offer: {
         question: "Try again?",
         accept: "Retry",

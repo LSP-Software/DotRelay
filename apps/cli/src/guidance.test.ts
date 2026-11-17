@@ -86,4 +86,15 @@ describe("guidance", () => {
   test("codes without guidance fall back to the error's own text", () => {
     expect(guidanceFor("variable_conflict", { command: "push" })).toBeNull();
   });
+
+  test("an unconfirmed publish never claims nothing changed", () => {
+    const guidance = guidanceFor("publication_uncertain", {
+      command: "push",
+      origin,
+    });
+    expect(guidance?.title).toBe("Not sure whether your publish went through");
+    expect(guidance?.explain).toContain("checks the earlier attempt");
+    expect(guidance?.explain).not.toContain("Nothing");
+    expect(guidance?.offer?.fix).toEqual({ kind: "retry" });
+  });
 });

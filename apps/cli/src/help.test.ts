@@ -176,10 +176,10 @@ describe("command help contract", () => {
     expect(group.stdout).toContain("Subcommands:");
     const badSubcommand = await run(["help", "device", "frobnicate"]);
     expect(badSubcommand.exitCode).toBe(2);
-    expect(badSubcommand.stderr).toContain("usage: dotrelay help");
+    expect(badSubcommand.stderr).toMatch(/usage: dotrelay help/i);
     const unknown = await run(["help", "frobnicate"]);
     expect(unknown.exitCode).toBe(2);
-    expect(unknown.stderr).toContain("usage: dotrelay help");
+    expect(unknown.stderr).toMatch(/usage: dotrelay help/i);
   });
 
   test("--help topic extraction follows the parser's command shape", () => {
@@ -203,34 +203,43 @@ describe("command help contract", () => {
     );
   });
 
+  // The wording of each error belongs to the parser; this contract only
+  // pins the usage line it ends with and the facts it must name.
   test("validation errors carry the usage line for the invoked command", () => {
-    expect(() => parseArguments(["device"])).toThrow("usage: dotrelay device");
-    expect(() => parseArguments(["status", "extra"])).toThrow(
-      "usage: dotrelay status",
+    const failure = (
+      args: readonly string[],
+      options?: Parameters<typeof parseArguments>[1],
+    ): string => {
+      try {
+        parseArguments([...args], options);
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+      throw new Error(`${args.join(" ")} was accepted`);
+    };
+    expect(failure(["device"])).toMatch(/usage: dotrelay device/i);
+    expect(failure(["status", "extra"])).toMatch(/usage: dotrelay status/i);
+    const unknownOption = failure(["status", "--frobnicate"]);
+    expect(unknownOption).toContain("--frobnicate");
+    expect(unknownOption).toMatch(/usage: dotrelay status/i);
+    expect(failure(["history", "--limit", "0"])).toMatch(
+      /usage: dotrelay history/i,
     );
-    expect(() => parseArguments(["status", "--frobnicate"])).toThrow(
-      "unknown option: --frobnicate; usage: dotrelay status",
+    expect(failure(["pull", "--stdout", "--output", ".env"])).toMatch(
+      /usage: dotrelay pull/i,
     );
-    expect(() => parseArguments(["history", "--limit", "0"])).toThrow(
-      "usage: dotrelay history",
+    expect(failure(["pull", "--stdout"], { stdoutIsTerminal: true })).toMatch(
+      /usage: dotrelay pull/i,
     );
-    expect(() =>
-      parseArguments(["pull", "--stdout", "--output", ".env"]),
-    ).toThrow("usage: dotrelay pull");
-    expect(() =>
-      parseArguments(["pull", "--stdout"], { stdoutIsTerminal: true }),
-    ).toThrow("usage: dotrelay pull");
-    expect(() => parseArguments(["project", "link"])).toThrow(
-      "the project link command requires --team <team-id>; usage: dotrelay project link --team <team-id>",
-    );
+    const link = failure(["project", "link"]);
+    expect(link).toContain("--team <team-id>");
+    expect(link).toMatch(/usage: dotrelay project link --team <team-id>/i);
     // An unknown subcommand has no usage line of its own: the error names
     // the group's real subcommands instead of inventing one.
-    expect(() => parseArguments(["env", "bogus"])).toThrow(
-      "unknown env subcommand: bogus; choose one of: list, use, create; usage: dotrelay env <subcommand>",
-    );
-    expect(() => parseArguments(["env", "bogus"])).not.toThrow(
-      "dotrelay env bogus",
-    );
+    const bogus = failure(["env", "bogus"]);
+    expect(bogus).toContain("list, use, create");
+    expect(bogus).toMatch(/usage: dotrelay env <subcommand>/i);
+    expect(bogus).not.toContain("dotrelay env bogus");
   });
 
   test("short aliases route to help and version", async () => {

@@ -1410,7 +1410,9 @@ try {
     const terminalOutput = terminal.stdout + terminal.stderr;
     if (
       terminal.exitCode !== 2 ||
-      !terminalOutput.includes("Refusing to write Values to terminal stdout") ||
+      !terminalOutput.includes(
+        "--stdout would print the values in your terminal",
+      ) ||
       terminalOutput.includes("USER_VALUE='secret'") ||
       terminalOutput.includes("SHARED_VALUE='one'")
     )

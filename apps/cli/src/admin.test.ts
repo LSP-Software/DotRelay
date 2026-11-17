@@ -163,7 +163,7 @@ describe("strict administration client", () => {
       },
     });
     await expect(client.get("/api/v1/teams", ["id"])).rejects.toThrow(
-      "invalid administration response",
+      "a response DotRelay didn't expect",
     );
     expect(authorization).toBe("Bearer session-token");
   });
@@ -512,9 +512,9 @@ describe("strict administration client", () => {
     ).rejects.toMatchObject({
       code: "environment_not_found",
       message: [
-        'no Environment is labelled "staging" in this Project (available: development).',
-        "Pick one of those, or create it with dotrelay env create staging (Team owners and admins).",
-        "Run dotrelay env list to see every Environment.",
+        'this project has no environment called "staging". Active ones: development.',
+        "Use one of those, or create it with dotrelay env create staging (team owners and admins only).",
+        "Run dotrelay env list to see every environment.",
       ].join("\n"),
     });
   });
@@ -541,7 +541,7 @@ describe("strict administration client", () => {
     ).rejects.toMatchObject({
       code: "environment_not_found",
       message: expect.stringContaining(
-        "(this Project has no active Environment yet).\nPick one of those, or create it with dotrelay env create <label>",
+        "and no active environments yet.\nCreate it with dotrelay env create <label>",
       ),
     });
   });
@@ -575,7 +575,7 @@ describe("strict administration client", () => {
     expect(posted[0]?.fields).toContain("currentHeadHash");
     await expect(
       createEnvironment(client, "00000000-0000-4000-8000-000000000002", "9x"),
-    ).rejects.toThrow("an Environment label starts with a letter");
+    ).rejects.toThrow("environment labels start with a letter");
   });
 
   test("duplicate labels offer explicit id guidance under --no-input", async () => {
@@ -750,7 +750,7 @@ describe("strict administration client", () => {
       id: "00000000-0000-4000-8000-000000000009",
       name: "LSP-Software",
     });
-    expect(lines.join("")).toContain("No Team yet");
+    expect(lines.join("")).toContain("You don't have a team yet");
   });
 
   test("lets the operator pick among multiple Teams", async () => {
@@ -836,9 +836,7 @@ describe("strict administration client network behaviour", () => {
       category: "transient",
       code: "service_unavailable",
     });
-    expect(String((error as Error).message)).toContain(
-      "the Server Profile stopped responding",
-    );
+    expect(String((error as Error).message)).toContain("stopped responding");
     expect(calls).toBe(3);
   });
 
@@ -858,9 +856,7 @@ describe("strict administration client network behaviour", () => {
       category: "transient",
       code: "service_unavailable",
     });
-    expect(String((error as Error).message)).toContain(
-      "could not reach the Server Profile after 3 attempts",
-    );
+    expect(String((error as Error).message)).toContain("after 3 attempts");
     expect(calls).toBe(3);
   });
 
@@ -918,9 +914,7 @@ describe("strict administration client network behaviour", () => {
       code: "rate_limited",
       details: expect.objectContaining({ retryAfterSeconds: 120 }),
     });
-    expect(String((error as Error).message)).toContain(
-      "wait 2 minutes and retry",
-    );
+    expect(String((error as Error).message)).toMatch(/wait 2 minutes/i);
   });
 
   test("declines an invitation with an Idempotency-Key and no fields", async () => {

@@ -84,6 +84,7 @@ import {
 import {
   CliError,
   CliInvocationError,
+  categoryTitleFor,
   diagnosticForError,
   EXIT_CODES,
   presentationForError,
@@ -251,7 +252,7 @@ const readGitRemotes = async (): Promise<readonly GitRemote[]> => {
   } catch {
     throw new CliError(
       "local-io",
-      "could not read Git remotes",
+      "Couldn't read this repository's Git remotes.",
       {},
       "repository_detection_failed",
     );
@@ -276,7 +277,9 @@ const defaultWorktreeConfigPath = async (): Promise<string> => {
       isAbsolute(gitDirectory) ? gitDirectory : resolve(gitDirectory),
     );
   } catch {
-    throw new CliInvocationError("could not locate the Git worktree context");
+    throw new CliInvocationError(
+      "Couldn't find a Git repository here. Run this from inside your project's repository.",
+    );
   }
 };
 
@@ -341,7 +344,7 @@ const resolveSelectedRepository = async (
   )
     throw new CliError(
       "conflict",
-      `the remote ${selection.choice.remote} names ${selection.choice.owner}/${selection.choice.name}, a different GitHub Repository than the one recorded for this worktree (${record.owner}/${record.name}); re-point the remote at the recorded repository, or re-record the choice with dotrelay context --remote ${selection.choice.remote}`,
+      `The remote ${selection.choice.remote} points at ${selection.choice.owner}/${selection.choice.name}, but this worktree was set up for ${record.owner}/${record.name}. Point the remote back at ${record.owner}/${record.name}, or switch this worktree to the new repository with dotrelay context --remote ${selection.choice.remote}.`,
       {},
       "repository_renamed",
     );
@@ -525,7 +528,7 @@ const renderStatusCard = (value: Record<string, unknown>): string => {
 const renderProfileList = (value: Record<string, unknown>): string => {
   const profiles = Array.isArray(value.profiles) ? value.profiles : [];
   if (profiles.length === 0)
-    return `${note(`No Server Profiles saved. Run ${setupHint} to add one.`)}\n`;
+    return `${note(`No servers saved yet. To add one, run ${setupHint}.`)}\n`;
   const rows = profiles.map((entry) => {
     const record = entry as Record<string, unknown>;
     return {
@@ -586,13 +589,14 @@ const renderContextCard = (value: Record<string, unknown>): string => {
   return `${railLines(kv(rows))}\n${bar()}\n${
     next.length > 0
       ? `${markLine("warn", paint(sanitizeCliText(next), "warn"))}\n${paint(GLYPHS.end, "ghost")}`
-      : epilogue("Context recorded")
+      : epilogue("Saved for this worktree")
   }\n`;
 };
 
 const renderDeviceResult = (
   command: string,
   value: Record<string, unknown>,
+  closing = true,
 ): string => {
   const rows: KvRow[] = [];
   if (typeof value.deviceId === "string")
@@ -668,7 +672,7 @@ const renderDeviceResult = (
     typeof value.message === "string" ? sanitizeCliText(value.message) : "";
   const lines: string[] = [];
   if (rows.length > 0) lines.push(railLines(kv(rows)), bar());
-  lines.push(closingLines(message.length > 0 ? message : "Done"));
+  lines.push(closingLines(message.length > 0 ? message : "Done", closing));
   return `${lines.join("\n")}\n`;
 };
 
@@ -689,12 +693,14 @@ const renderGenericResult = (value: Record<string, unknown>): string => {
   return `${kv(rows)}\n`;
 };
 
-// A result message such as "Wrote 14 values to .env; prior file retained
-// at .env.previous" closes the rail: the first clause is the result, the
-// rest are notes above it.
+// A result message such as "Wrote 14 values to .env. The old file is kept
+// at .env.previous." closes the rail: the first sentence (or clause, in the
+// older "x; y" form) is the result, the rest are notes above it. A dot only
+// ends a sentence before a space and a capital, so file names, origins and
+// version numbers stay whole.
 const closingLines = (message: string, closing = true): string => {
   const [first = "", ...rest] = sanitizeCliText(message)
-    .split("; ")
+    .split(/; |(?<=[.!?])\s+(?=[A-Z])/)
     .map((part) => part.trim())
     .filter((part) => part.length > 0);
   const result = `${first.charAt(0).toUpperCase()}${first.slice(1)}`;
@@ -716,7 +722,7 @@ const recoveryCodeBlock = (code: string, warning: string): string =>
     `${bar()}    ${bold(sanitizeCliLine(code))}`,
     bar(),
     railText(
-      "Without this code or another unlocked device, your values can't be recovered. Lose both and the account is locked for good.",
+      "If you lose this code and every unlocked device, nobody can decrypt your values, DotRelay included.",
       "muted",
     ),
     ...(warning ? [railText(warning, "faint")] : []),
@@ -740,7 +746,7 @@ const renderSuccess = (
     return renderProfileList(value);
   if (parsed.command === "context") return renderContextCard(value);
   if (parsed.command === "device" && parsed.subcommand)
-    return renderDeviceResult(parsed.subcommand, value);
+    return renderDeviceResult(parsed.subcommand, value, closing);
   if (parsed.command === "login" || parsed.command === "setup") {
     const code =
       typeof value.recoveryCode === "string" ? value.recoveryCode : "";
@@ -757,10 +763,10 @@ const renderSuccess = (
   }
   if (typeof value.message === "string") {
     if (parsed.command === "profile" && parsed.subcommand === "use")
-      return `${closingLines(`Selected ${sanitizeCliLine(String(value.profile))}`, closing)}\n`;
+      return `${closingLines(`Now using ${sanitizeCliLine(String(value.profile))}`, closing)}\n`;
     if (parsed.command === "env" && parsed.subcommand === "use")
       return `${closingLines(
-        `Environment set to ${sanitizeCliLine(String(value.environment ?? value.environmentId ?? "the selection"))}`,
+        `Now using environment ${sanitizeCliLine(String(value.environment ?? value.environmentId ?? "the selection"))}`,
         closing,
       )}\n`;
     if (parsed.command === "project" && parsed.subcommand === "link")
@@ -812,7 +818,7 @@ const requireEnrolledDevice = (deviceId: string | null): string => {
   if (deviceId) return deviceId;
   throw new CliError(
     "authentication",
-    "no Device is enrolled for this Server Profile; run dotrelay login or dotrelay device enroll",
+    "This machine isn't enrolled on this server yet. Run dotrelay login, or dotrelay device enroll if you're already signed in.",
     {},
     "device_bundle_missing",
   );
@@ -862,10 +868,10 @@ const describeDuration = (seconds: number): string => {
 };
 
 const retryReasonPhrase: Record<RetryReason, string> = {
-  offline: "The Server Profile is unreachable",
-  stalled: "The Server Profile stopped responding",
+  offline: "Can't reach the server",
+  stalled: "The server stopped responding",
   // A rate limit or a 5xx answer: both are transient server conditions.
-  server: "The Server Profile is temporarily unavailable",
+  server: "The server is busy or briefly down",
 };
 
 const loginAndEnroll = async (
@@ -894,7 +900,7 @@ const loginAndEnroll = async (
   const retryLine = (
     progress: Extract<LoginProgress, { readonly kind: "retry" }>,
   ): string =>
-    `${retryReasonPhrase[progress.reason]}; ${progress.maxAttempts !== undefined ? `retry ${progress.attempt} of ${progress.maxAttempts}` : `retry ${progress.attempt}`} — next in ${Math.max(1, Math.ceil(progress.nextDelayMs / 1000))}s`;
+    `${retryReasonPhrase[progress.reason]}. Retry ${progress.maxAttempts !== undefined ? `${progress.attempt} of ${progress.maxAttempts}` : progress.attempt} in ${Math.max(1, Math.ceil(progress.nextDelayMs / 1000))}s`;
   const renderLoginCard = (hint: string): string => {
     const [url, code, expiry] = waitingBody;
     const lines = [
@@ -999,7 +1005,7 @@ const loginAndEnroll = async (
       // Piped human output cannot redraw the waiting card, so each change
       // is a single appended line.
       if (progress.kind === "retry") output.write(`${retryLine(progress)}\n`);
-      else output.write("The Server Profile is back; still waiting\n");
+      else output.write("The server is back. Still waiting for sign-in.\n");
       return;
     }
     renderWaiting();
@@ -1044,7 +1050,7 @@ const loginAndEnroll = async (
               json(
                 diagnosticForError(
                   browserOpenFailure(
-                    "could not open the verification page in a browser; open the URL from the authorization event",
+                    "Couldn't open the sign-in page in a browser. Open verificationUri from the device_authorization event instead.",
                   ),
                 ),
               ),
@@ -1080,7 +1086,7 @@ const loginAndEnroll = async (
       if (parsed.noInput)
         throw new CliError(
           "authentication",
-          "GitHub sign-in was saved. Authorize this installation with dotrelay device enroll from an existing Device, or run dotrelay device recover --recovery-code-file <path> if your Devices are lost.",
+          "You're signed in, but this machine can't read your values yet. Enroll it with dotrelay device enroll and approve it from a device you already use, or run dotrelay device recover --recovery-code-file <path> if you've lost your devices.",
           {},
           "account_key_not_unlocked",
         );
@@ -1112,7 +1118,7 @@ const loginAndEnroll = async (
   if (recovery === null && parsed.noInput)
     throw new CliError(
       "authentication",
-      "GitHub verified and this Device enrolled, but its encryption key is still locked. Run dotrelay device recover --recovery-code-file <path> (or use a Device transfer) to finish setup.",
+      "You're signed in and this device is enrolled, but it doesn't have your account key yet. To finish, run dotrelay device recover --recovery-code-file <path>, or send the key from another device.",
       {},
       "account_key_not_unlocked",
     );
@@ -1143,10 +1149,10 @@ const loginAndEnroll = async (
         ? `Signed in to ${profile.name}. This device was already enrolled.`
         : `Signed in to ${profile.name}. This device is enrolled.`,
     nextAction: recovery?.recoveryCode
-      ? "Save the recovery code now. It is shown once; without it or another unlocked device, encrypted values cannot be recovered."
+      ? "Save the recovery code now. It's shown once. Without it or another unlocked device, nobody can decrypt your values."
       : recovered
-        ? "This device can decrypt your values. Keep your saved recovery code safe for another device."
-        : "Keep your saved recovery code safe. If it was lost but this device is still unlocked, run dotrelay device backup to replace it. GitHub sign-in cannot recover encrypted values.",
+        ? "This device can read your values. Keep your recovery code somewhere safe for setting up other devices."
+        : "Keep your recovery code somewhere safe. If you've lost it and this device is still unlocked, run dotrelay device backup to make a new one. Signing in with GitHub can't recover your values.",
   };
 };
 
@@ -1421,7 +1427,7 @@ const verifyStatus = async (
   // Connected but this worktree is not linked yet: say what to run here.
   const hint =
     nextAction === "none" && inWorktree && context?.projectId === undefined
-      ? "this repository is not linked on this machine yet: run dotrelay pull if a teammate already published it, or dotrelay init to publish its .env"
+      ? "This repository isn't linked on this machine yet. Run dotrelay pull if a teammate already published it, or dotrelay init to publish its .env."
       : null;
   return {
     profile: selected.name,
@@ -1491,17 +1497,17 @@ const requireWorktreeProject = async (
     if (!token)
       throw new CliError(
         "authentication",
-        "login is required for this Server Profile",
+        "You're not signed in to this server. Run dotrelay login.",
         {},
         "authentication_required",
       );
     throw new CliInvocationError(
-      "no Project is linked in this worktree yet; run dotrelay pull (or dotrelay init to publish this repository's .env) first",
+      "This repository isn't linked to a project yet. Run dotrelay pull if a teammate already published it, or dotrelay init to publish its .env.",
     );
   }
   if (context.serverProfileId !== profile.pin.serverProfileId)
     throw new CliInvocationError(
-      "worktree Project belongs to a different Server Profile",
+      "This repository is linked to a project on a different server. Pick that server with --profile <name>.",
     );
   return { contextPath, context, projectId: context.projectId };
 };
@@ -1511,7 +1517,7 @@ const renderEnvironmentList = (
   selectedId: string | undefined,
 ): string => {
   if (environments.length === 0)
-    return `${note("This Project has no Environments yet. Create one with dotrelay env create <label>.")}\n`;
+    return `${note("This project has no environments yet. Create one with dotrelay env create <label>.")}\n`;
   const width = Math.max(...environments.map((entry) => entry.label.length));
   const lines = environments.map((entry) => {
     const selected = entry.id === selectedId;
@@ -1581,7 +1587,7 @@ const execute = async (
     const label = helpLabelFor(topic);
     if (!label)
       throw new CliInvocationError(
-        `${topic.join(" ")} is not a command; usage: dotrelay help [<command>]`,
+        `DotRelay has no ${topic.join(" ")} command.\nUsage: dotrelay help [<command>]`,
       );
     return { value: { stdout: `${renderCommandHelp(label)}\n` } };
   }
@@ -1592,7 +1598,10 @@ const execute = async (
   const store = createFileProfileCatalog(catalogPath);
   if (parsed.command === "setup") {
     const rawOrigin = parsed.positionals[0];
-    if (!rawOrigin) throw new CliInvocationError("setup requires an origin");
+    if (!rawOrigin)
+      throw new CliInvocationError(
+        "dotrelay setup needs the server's address.",
+      );
     const origin = withDefaultProtocol(rawOrigin);
     const catalog = await store.read();
     const existing = catalog.profiles.find(
@@ -1616,7 +1625,9 @@ const execute = async (
   if (parsed.command === "profile" && parsed.subcommand === "add") {
     const [name, origin] = parsed.positionals;
     if (!name || !origin)
-      throw new Error("profile add requires a name and origin");
+      throw new Error(
+        "dotrelay profile add needs a profile name and the server's address.",
+      );
     const profile = await addServerProfile(store, name, origin, {
       ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
       ...(runtime.networkPolicy
@@ -1634,7 +1645,9 @@ const execute = async (
   if (parsed.command === "profile" && parsed.subcommand === "rebind") {
     const [name, origin] = parsed.positionals;
     if (!name || !origin)
-      throw new CliInvocationError("profile rebind requires a name and origin");
+      throw new CliInvocationError(
+        "dotrelay profile rebind needs a profile name and the server's address.",
+      );
     const profilePath = runtime.profilePath ?? profileCatalogPath();
     const stateDirectory = runtime.stateDirectory ?? dirname(profilePath);
     const output = runtime.terminal?.output ?? process.stderr;
@@ -1671,7 +1684,8 @@ const execute = async (
           origin: rebound.profile.origin,
           serverProfileId: rebound.profile.pin.serverProfileId,
           identityChanged: false,
-          message: "Server Profile identity is unchanged",
+          message:
+            "The server's identity hasn't changed, so there's nothing to rebind.",
         },
       };
     const resetCount =
@@ -1689,13 +1703,13 @@ const execute = async (
         identityChanged: true,
         backupPath: rebound.backupPath,
         historyResetCount: resetCount,
-        message: `${rebound.statement} Backup: ${rebound.backupPath}. Reset trusted history for ${resetCount} Environment record${resetCount === 1 ? "" : "s"}.`,
+        message: `${rebound.statement} The old profile list is backed up at ${rebound.backupPath}. Cleared the trusted history for ${resetCount} environment${resetCount === 1 ? "" : "s"}.`,
       },
     };
   }
   if (parsed.command === "profile" && parsed.subcommand === "use") {
     const name = parsed.positionals[0];
-    if (!name) throw new Error("profile use requires a name");
+    if (!name) throw new Error("dotrelay profile use needs a profile name.");
     const profile = await useServerProfile(store, name);
     return {
       value: { profile: profile.name, origin: profile.origin, selected: true },
@@ -1767,12 +1781,12 @@ const execute = async (
     const name = sanitizeCliLine(profile.name);
     const message =
       serverSession === "revoked"
-        ? `Signed out of ${name}: the session was revoked on the server and removed from this machine.`
+        ? `Signed out of ${name}. The session was revoked on the server and removed from this machine.`
         : serverSession === "already-ended"
-          ? `Signed out of ${name}: the server session had already ended, and the local copy was removed.`
+          ? `Signed out of ${name}. The server session had already ended, and the copy on this machine was removed.`
           : serverSession === "unreachable"
-            ? `Removed the local session for ${name}. The server could not be reached, so the session was not revoked there; it expires on its own.`
-            : `No session was stored for ${name}; nothing to sign out of.`;
+            ? `Removed the session for ${name} from this machine. Couldn't reach the server, so the session wasn't revoked there. It expires on its own.`
+            : `No session was saved for ${name}, so there was nothing to sign out of.`;
     return {
       value: {
         profile: profile.name,
@@ -1810,8 +1824,8 @@ const execute = async (
         projectCleared: reselected.projectCleared,
         environmentCleared: reselected.environmentCleared,
         message: reselected.removed
-          ? `Removed the invalid worktree context. Backup: ${reselected.backupPath}. Device keys and trusted Revision history were kept.`
-          : `Cleared the Project and Environment selection. Backup: ${reselected.backupPath}. Device keys and trusted Revision history were kept.`,
+          ? `Removed this worktree's broken context. A backup is at ${reselected.backupPath}. Device keys and trusted revision history were kept.`
+          : `Cleared the project and environment selection. A backup is at ${reselected.backupPath}. Device keys and trusted revision history were kept.`,
       },
     };
   }
@@ -1831,7 +1845,7 @@ const execute = async (
       context.serverProfileId !== profile.pin.serverProfileId
     )
       throw new CliInvocationError(
-        "worktree context belongs to a different Server Profile",
+        "This repository's saved context is for a different server. Pick that server with --profile <name>.",
       );
     const selection = await selectGitHubRepository(
       await (runtime.readGitRemotes ?? readGitRemotes)(),
@@ -1903,7 +1917,7 @@ const execute = async (
         ...(verifiedIdentity === undefined
           ? {
               nextAction:
-                "sign in to this Server Profile and enroll a Device to verify the repository identity",
+                "Run dotrelay login to sign in and enroll this device, so DotRelay can verify this repository with GitHub.",
             }
           : {}),
         ...(context?.projectId ? { projectId: context.projectId } : {}),
@@ -1924,7 +1938,7 @@ const execute = async (
   if (parsed.command === "project" && parsed.subcommand === "rotate") {
     if (parsed.noInput && !parsed.profile)
       throw new CliInvocationError(
-        "--no-input requires explicit --profile for project rotate",
+        "With --no-input, dotrelay project rotate needs --profile <name>.",
       );
     const profile = await resolveServerProfile(
       store,
@@ -2000,7 +2014,9 @@ const execute = async (
         ? [
             bar(),
             note("Invitations to accept in the web app", "warn"),
-            railText("To turn one down: dotrelay team decline <invitation-id>"),
+            railText(
+              "To turn one down, run dotrelay team decline <invitation-id>.",
+            ),
             ...pending.invitations.map((invitation) =>
               row(invitation.name, `invitation ${invitation.invitationId}`),
             ),
@@ -2025,7 +2041,7 @@ const execute = async (
   if (parsed.command === "account") {
     if (parsed.noInput && !parsed.profile)
       throw new CliInvocationError(
-        `--no-input requires explicit --profile for account ${parsed.subcommand}`,
+        `With --no-input, dotrelay account ${parsed.subcommand} needs --profile <name>.`,
       );
     const profile = await resolveServerProfile(
       store,
@@ -2052,7 +2068,7 @@ const execute = async (
   if (parsed.command === "team") {
     if (parsed.noInput && !parsed.profile)
       throw new CliInvocationError(
-        `--no-input requires explicit --profile for team ${parsed.subcommand}`,
+        `With --no-input, dotrelay team ${parsed.subcommand} needs --profile <name>.`,
       );
     const profile = await resolveServerProfile(
       store,
@@ -2109,7 +2125,7 @@ const execute = async (
       parsed.team?.toLowerCase() ??
       (() => {
         throw new CliInvocationError(
-          "project link requires --team <team-id>; usage: dotrelay project link --team <team-id>",
+          "dotrelay project link needs --team <team-id>.\nUsage: dotrelay project link --team <team-id>",
         );
       })();
     const contextPath =
@@ -2171,21 +2187,21 @@ const execute = async (
       if (!token)
         throw new CliError(
           "authentication",
-          "login is required for this Server Profile",
+          "You're not signed in to this server. Run dotrelay login.",
           {},
           "authentication_required",
         );
       throw new CliInvocationError(
-        "No Project selected; use project link before selecting an Environment",
+        "This repository isn't linked to a project yet. Link it with dotrelay project link --team <team-id> before you choose an environment.",
       );
     }
     if (context.serverProfileId !== profile.pin.serverProfileId)
       throw new CliInvocationError(
-        "worktree Project belongs to a different Server Profile",
+        "This repository is linked to a project on a different server. Pick that server with --profile <name>.",
       );
     const environmentReference = parsed.environment ?? parsed.positionals[0];
     if (!environmentReference)
-      throw new Error("env use requires an Environment id or label");
+      throw new Error("dotrelay env use needs an environment id or label.");
     const admin = await createAdminClient(runtime, profile, credentials);
     const environment = await resolveEnvironmentReference(
       admin,
@@ -2243,8 +2259,8 @@ const execute = async (
           created: existing === undefined,
           message:
             existing === undefined
-              ? `Created Environment ${sanitizeCliLine(environment.label)} (${environment.id}). Select it with dotrelay env use ${environment.label}, or publish to it with dotrelay push --environment ${environment.label}.`
-              : `Environment ${sanitizeCliLine(environment.label)} already exists (${environment.id}); nothing was created.`,
+              ? `Created environment ${sanitizeCliLine(environment.label)} (${environment.id}). Switch to it with dotrelay env use ${environment.label}, or push to it with dotrelay push --environment ${environment.label}.`
+              : `Environment ${sanitizeCliLine(environment.label)} already exists (${environment.id}), so nothing was created.`,
         },
       };
     }
@@ -2338,7 +2354,7 @@ const execute = async (
     ];
     const lines = devices.map(
       (device) =>
-        `  ${device.current ? paint("▸", "brand") : paint("·", "ghost")}  ${sanitizeCliLine(device.name ?? "unnamed Device")}  ${paint(device.id, "faint")}${device.current ? `  ${paint("this Device", "muted")}` : ""}${
+        `  ${device.current ? paint("▸", "brand") : paint("·", "ghost")}  ${sanitizeCliLine(device.name ?? "unnamed device")}  ${paint(device.id, "faint")}${device.current ? `  ${paint("this device", "muted")}` : ""}${
           "fingerprint" in device && device.fingerprint
             ? `\n     ${paint(`key fingerprint ${device.fingerprint}`, "muted")}`
             : ""
@@ -2353,7 +2369,7 @@ const execute = async (
           : {
               stdout:
                 devices.length === 0
-                  ? `${note("No active Devices. Run dotrelay login to enroll this machine.")}\n`
+                  ? `${note("No active devices. Run dotrelay login to enroll this machine.")}\n`
                   : `${lines.join("\n")}\n`,
             }),
       },
@@ -2376,7 +2392,7 @@ const execute = async (
   ) {
     if (parsed.noInput && !parsed.profile)
       throw new CliInvocationError(
-        "--no-input requires explicit --profile for Device trust commands",
+        `With --no-input, dotrelay device ${parsed.subcommand} needs --profile <name>.`,
       );
     const profile = await resolveServerProfile(
       store,
@@ -2457,7 +2473,7 @@ const execute = async (
         ),
       };
     throw new CliInvocationError(
-      "unrecognized device command; run dotrelay device --help",
+      "DotRelay has no such device command. Run dotrelay help device.",
     );
   }
   const protectedCommands = new Set([
@@ -2473,7 +2489,9 @@ const execute = async (
   ]);
   if (protectedCommands.has(parsed.command)) {
     if (parsed.noInput && !parsed.profile)
-      throw new CliInvocationError("--no-input requires explicit --profile");
+      throw new CliInvocationError(
+        `With --no-input, dotrelay ${parsed.command} needs --profile <name>.`,
+      );
     const profile = await resolveServerProfile(
       store,
       parsed.profile,
@@ -2493,7 +2511,7 @@ const execute = async (
       !hasProvidedEnvironment
     )
       throw new CliInvocationError(
-        "--no-input requires explicit --environment context",
+        `With --no-input, dotrelay ${parsed.command} needs --environment <environment-id-or-label>.`,
       );
     const stateDirectory =
       runtime.stateDirectory ??
@@ -2553,7 +2571,9 @@ const execute = async (
       if (explicitTeamId) {
         teams = await listTeams(admin);
         if (!teams.some((team) => team.id === explicitTeamId))
-          throw new CliInvocationError("the specified Team is not available");
+          throw new CliInvocationError(
+            "You're not an active member of that team. Run dotrelay team list to see your teams.",
+          );
       }
       const resolution = await findProjectByRepository(
         admin,
@@ -2579,18 +2599,18 @@ const execute = async (
         const teamName = (teamId: string): string =>
           teams?.find((team) => team.id === teamId)?.name ?? teamId;
         const label = (candidate: ProjectSummary): string =>
-          `${teamName(candidate.teamId)} (${candidate.teamId}) — ${resolved.owner}/${resolved.name}`;
+          `${teamName(candidate.teamId)} (${candidate.teamId}) · ${resolved.owner}/${resolved.name}`;
         if (parsed.noInput)
           throw new CliError(
             "invocation",
-            `multiple Projects are linked to this GitHub Repository; pass --team <team-id>:\n${resolution.candidates
+            `More than one project is linked to this GitHub repository. Pass --team <team-id> to pick one:\n${resolution.candidates
               .map((candidate, index) => `${index + 1}. ${label(candidate)}`)
               .join("\n")}`,
             {},
             "project_ambiguous",
           );
         const selectedId = await selectOption(
-          "Project",
+          "Which project?",
           resolution.candidates.map((candidate) => ({
             id: candidate.id,
             label: label(candidate),
@@ -2607,7 +2627,9 @@ const execute = async (
           (candidate) => candidate.id === selectedId,
         );
         if (!selected)
-          throw new CliInvocationError("choose a Project from the list");
+          throw new CliInvocationError(
+            "Choose one of the projects in the list.",
+          );
         existingProject = selected;
       }
       // The Project lookup only spans active Memberships, so a User who
@@ -2626,9 +2648,9 @@ const execute = async (
           throw new CliError(
             "authentication",
             [
-              `you joined ${waiting.map((team) => sanitizeCliLine(team.name)).join(", ")}, but its Project keys have not been shared with you yet, so this Repository's Project is not visible to you.`,
+              `You joined ${waiting.map((team) => sanitizeCliLine(team.name)).join(", ")}, but nobody has shared its project keys with you yet, so you can't see this repository's project.`,
               SHARE_PROJECT_KEYS_STEP,
-              "Then run this command again. To publish this Repository in a different Team instead, pass --team <team-id>.",
+              "Then run this command again. To publish this repository in a different team instead, pass --team <team-id>.",
             ].join("\n"),
             {},
             "membership_pending",
@@ -2641,8 +2663,8 @@ const execute = async (
           throw new CliError(
             "authentication",
             [
-              `you have an invitation to ${invited.map((team) => sanitizeCliLine(team.name)).join(", ")} that is not accepted yet.`,
-              "Accept it in the DotRelay web app, then ask a Team owner or admin to share the Project keys with you.",
+              `You have an invitation to ${invited.map((team) => sanitizeCliLine(team.name)).join(", ")} that you haven't accepted yet.`,
+              "Accept it in the DotRelay web app, then ask a team owner or admin to share the project keys with you.",
               "Then run this command again.",
             ].join("\n"),
             {},
@@ -2656,7 +2678,7 @@ const execute = async (
       )
         throw new CliError(
           "invocation",
-          "this GitHub Repository is not linked to a Project you can access. If a teammate published it, ask a Team owner or admin to invite you and share the Project keys with you; to publish it yourself, run dotrelay init",
+          "This GitHub repository isn't linked to a project you can access. If a teammate published it, ask a team owner or admin to invite you and share the project keys with you. To publish it yourself, run dotrelay init.",
           {},
           "project_not_linked",
         );
@@ -2773,7 +2795,7 @@ const execute = async (
           parsed.command !== "push"
         )
           throw new CliInvocationError(
-            "--no-input requires explicit --environment context",
+            `With --no-input, dotrelay ${parsed.command} needs --environment <environment-id-or-label>.`,
           );
       }
       const environmentId =
@@ -2850,7 +2872,7 @@ const execute = async (
   }
   throw new CliError(
     "invocation",
-    `command ${parsed.command}${parsed.subcommand ? ` ${parsed.subcommand}` : ""} is not available in this foundation build`,
+    `dotrelay ${parsed.command}${parsed.subcommand ? ` ${parsed.subcommand}` : ""} isn't available in this build.`,
     {},
     "command_unavailable",
   );
@@ -2938,7 +2960,7 @@ const chooseServer = async (runtime: CliRuntime): Promise<string> => {
         )
   ).trim();
   if (typed.length === 0)
-    throw new CliInvocationError("a server address is required");
+    throw new CliInvocationError("Enter the server's address to continue.");
   return typed;
 };
 
@@ -2987,7 +3009,14 @@ const executeGuided = async (
         ...(runtime.prompt ? { prompt: runtime.prompt } : {}),
         ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
       });
-      if (!accepted) throw new GuidanceDeclined(thrown, guidance.next);
+      if (!accepted)
+        throw new GuidanceDeclined(
+          thrown,
+          guidance.next ??
+            (offer.fix.kind === "retry"
+              ? `dotrelay ${own.join(" ")}`
+              : undefined),
+        );
       const nested: CliRuntime = { ...runtime, nested: true };
       if (offer.fix.kind !== "retry") {
         const fixArgs = [
@@ -3093,7 +3122,8 @@ export const run = async (
     });
     const presentation = presentationForError(error, { debug });
     const parsedNext = presentation.fixes
-      .map((fix) => /^Run (dotrelay [^\s].*)$/.exec(fix)?.[1])
+      // A fix line may end its sentence with a dot; the command doesn't.
+      .map((fix) => /^Run (dotrelay \S.*?)\.?$/.exec(fix)?.[1])
       .find((command) => command !== undefined);
     const next = guidance?.next ?? parsedNext;
     if (own.includes("--json"))
@@ -3102,6 +3132,21 @@ export const run = async (
         stdout: "",
         stderr: json(next ? { ...diagnostic, next } : diagnostic),
       };
+    // "Check the command" says less than an invocation error's own first
+    // sentence, so that sentence becomes the headline:
+    // "dotrelay setup needs the server's address".
+    const generic =
+      guidance === null &&
+      diagnostic.category === "invocation" &&
+      presentation.title === categoryTitleFor("invocation");
+    const firstSentence = generic
+      ? /^(.+?[^.\s])\.(?:\s+(?=[A-Z<])|$)/su.exec(presentation.detail)
+      : null;
+    const headline = firstSentence?.[1] ?? null;
+    const body =
+      headline === null
+        ? presentation.detail
+        : presentation.detail.slice(firstSentence?.[0].length ?? 0).trim();
     // Someone at a terminal gets the plain explanation; scripts and
     // --no-input keep the precise detail with its flags and file names.
     const plain = guided && guidance?.explain !== undefined && !debug;
@@ -3109,8 +3154,8 @@ export const run = async (
       exitCode: diagnostic.exitCode,
       stdout: "",
       stderr: `${errorCard({
-        title: guidance?.title ?? presentation.title,
-        detail: plain ? (guidance?.explain ?? "") : presentation.detail,
+        title: guidance?.title ?? headline ?? presentation.title,
+        detail: plain ? (guidance?.explain ?? "") : body,
         fixes: plain
           ? []
           : presentation.fixes.filter(
@@ -3118,7 +3163,9 @@ export const run = async (
               // a fix that offers another route ("or ...") stays.
               (fix) =>
                 next === undefined ||
-                (fix !== `Run ${next}` && !fix.startsWith(`Run ${next} (`)),
+                (fix !== `Run ${next}` &&
+                  fix !== `Run ${next}.` &&
+                  !fix.startsWith(`Run ${next} (`)),
             ),
         next,
       })}\n`,
