@@ -26,7 +26,7 @@ import {
   writePublicationBaseline,
 } from "./baseline-store";
 import { classifyVariablesInteractively } from "./classify-ui";
-import { reviewFrame, stepDone } from "./components";
+import { reviewFrame } from "./components";
 import {
   type ClassifiedDotenvEntry,
   classifyDotenv,
@@ -739,7 +739,7 @@ export const publish = async (
       // The rollback review names the append-only consequence: the operator
       // approves adding a Rollback Revision, not rewriting earlier ones.
       const frame = reviewFrame({
-        title: `Review — roll back in ${environment}`,
+        title: `Roll back in ${environment}`,
         danger: true,
         body: reviewBody(changes, destination, parsed.reveal, [
           `  ${paint(ROLLBACK_NOTE, "faint")}`,
@@ -751,7 +751,7 @@ export const publish = async (
         throw new CliInvocationError("rollback confirmation was declined");
     } else {
       const frame = reviewFrame({
-        title: `Review — publish to ${environment}`,
+        title: `Publish to ${environment}`,
         body: reviewBody(changes, destination, parsed.reveal),
         question: publicationConfirmQuestion(),
       });
@@ -765,13 +765,13 @@ export const publish = async (
     live: (options.terminal?.output as { isTTY?: boolean })?.isTTY === true,
     quiet: options.noInput || parsed.json,
   });
-  progress.start("Encrypting values");
+  progress.start("Encrypting and signing on this device");
   let artifacts: Awaited<ReturnType<typeof createPublicationArtifacts>>;
   try {
     artifacts = await createPublicationArtifacts(draftVariables, context);
     assertPublicationAccepted(reviewPublication(artifacts.commandBytes));
   } catch (error) {
-    progress.fail("Encrypting values");
+    progress.fail("Couldn't encrypt the changes");
     if (error instanceof CliError) throw error;
     throw new CliError(
       "invocation",
@@ -788,7 +788,7 @@ export const publish = async (
     (variable) => variable.hasDraftChange,
   ).length;
   progress.done(
-    `Encrypted ${changedCount} Variable${changedCount === 1 ? "" : "s"}`,
+    `Encrypted and signed ${changedCount} ${changedCount === 1 ? "change" : "changes"}`,
   );
   const operationId = crypto.randomUUID();
   progress.start("Uploading");
@@ -823,7 +823,7 @@ export const publish = async (
     await synced.workflow.transport
       .cancel({ operationId, deviceId: synced.workflow.deviceId })
       .catch(() => undefined);
-    progress.fail("Uploading");
+    progress.fail("Upload stopped");
     if (error instanceof CliError) throw error;
     const problem = error as { problem?: { code?: string } };
     const code = problem.problem?.code ?? "service_unavailable";
@@ -856,14 +856,8 @@ export const publish = async (
       code,
     );
   }
-  progress.done("Uploaded");
+  progress.done("Uploaded and finalized");
   await settleFallbackBaseline(options, reconciliation);
-  if (!options.noInput && !parsed.json)
-    stepDone(
-      mutation === "ROLLBACK"
-        ? "Rollback published"
-        : `Published ${changedCount} Variable${changedCount === 1 ? "" : "s"}`,
-    );
   return {
     revision: artifacts.request.revision.id,
     lanes: artifacts.encryptedLaneCount,

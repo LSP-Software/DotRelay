@@ -1,14 +1,18 @@
 import {
+  bar,
   confirmBox,
   confirmHint,
   confirmResult,
   confirmRows,
+  markLine,
   numberedHint,
   numberedRow,
   selectionHint,
+  selectionResult,
   selectionRow,
   selectionTitle,
 } from "./components";
+import { paint as paintTone } from "./theme";
 import { CliInvocationError } from "./errors";
 import { readTerminalLine, type TerminalIo } from "./terminal";
 
@@ -115,7 +119,7 @@ const renderSelect = (
     )
     .join("\n");
   const hint = interactive ? selectionHint(true) : numberedHint(defaultToFirst);
-  return `${selectionTitle(title)}\n\n${rows}\n\n${hint}\n`;
+  return `${selectionTitle(title)}\n${rows}\n${hint}\n`;
 };
 
 export const selectOption = async (
@@ -166,6 +170,7 @@ export const selectOption = async (
           const chosen = choices[cursor];
           if (!chosen)
             throw new CliInvocationError("choose an option from the list");
+          rewriteRegion(output, rendered, selectionResult(title, chosen.label));
           return chosen.id;
         }
         if (key === "\u001b[A" || key === "k") {
@@ -227,10 +232,23 @@ const renderConfirm = (
   question: string,
   silent: boolean,
   cursor: number,
+  labels?: readonly [string, string],
 ): string =>
   silent
-    ? `${confirmRows(cursor)}\n${confirmHint()}`
-    : confirmBox(question, cursor);
+    ? `${confirmRows(cursor, labels)}\n${confirmHint()}`
+    : confirmBox(question, cursor, labels);
+
+// A silent confirm answers a question a review already printed, so it
+// settles to the answer alone instead of repeating the question.
+const settledConfirm = (
+  question: string,
+  silent: boolean,
+  accepted: boolean,
+  labels?: readonly [string, string],
+): string =>
+  silent
+    ? `${bar()}  ${paintTone(accepted ? (labels?.[0] ?? "Yes") : (labels?.[1] ?? "No"), accepted ? "brand" : "danger")}\n${bar()}`
+    : confirmResult(question, accepted, labels);
 
 const runRawConfirm = async (
   question: string,
@@ -238,6 +256,7 @@ const runRawConfirm = async (
   options: Readonly<{
     readonly silent?: boolean;
     readonly default?: "yes" | "no";
+    readonly labels?: readonly [string, string];
   }> = {},
 ): Promise<boolean> => {
   const input = terminal.input as ReadableRaw;
@@ -251,7 +270,7 @@ const runRawConfirm = async (
   let rendered = rewriteRegion(
     output,
     0,
-    renderConfirm(question, silent, cursor),
+    renderConfirm(question, silent, cursor, options.labels),
   );
   try {
     for (;;) {
@@ -267,18 +286,35 @@ const runRawConfirm = async (
       else if (
         key === "\u001b[A" ||
         key === "\u001b[B" ||
+        key === "\u001b[C" ||
+        key === "\u001b[D" ||
+        key === "\t" ||
         key === "j" ||
-        key === "k"
+        key === "k" ||
+        key === "h" ||
+        key === "l"
       )
         cursor = 1 - cursor;
       if (decided !== null) {
-        rewriteRegion(output, rendered, confirmResult(question, decided));
+        // A silent confirm answers the question line the review printed
+        // just above it; on a terminal that line is redrawn as answered.
+        const questionLines =
+          silent && (output as WritableTty).isTTY === true
+            ? markLine("info", question).split("\n").length
+            : 0;
+        rewriteRegion(
+          output,
+          rendered + questionLines,
+          questionLines > 0
+            ? confirmResult(question, decided, options.labels)
+            : settledConfirm(question, silent, decided, options.labels),
+        );
         return decided;
       }
       rendered = rewriteRegion(
         output,
         rendered,
-        renderConfirm(question, silent, cursor),
+        renderConfirm(question, silent, cursor, options.labels),
       );
     }
   } finally {
@@ -299,6 +335,8 @@ export const confirmAction = async (
     readonly silent?: boolean;
     /** The choice a bare Enter approves; defaults to "no". */
     readonly default?: "yes" | "no";
+    /** Labels for the two choices; defaults to Yes and No. */
+    readonly labels?: readonly [string, string];
   }> = {},
 ): Promise<boolean> => {
   if (options.confirm) return options.confirm(question);
@@ -347,13 +385,18 @@ export const readTerminalSecret = async (
     input.setEncoding?.("utf8");
     input.setRawMode?.(true);
     input.resume?.();
-    const written = rewriteRegion(output, 0, `${question}:`);
+    const label = `${paintTone("◆", "brand")}  ${question}`;
+    const written = rewriteRegion(
+      output,
+      0,
+      `${label}\n${bar()}  ${paintTone("›", "brand")} `,
+    );
     let buffer = "";
     const render = (masked: string) =>
       rewriteRegion(
         output,
         written,
-        buffer ? `${question}: ${masked}` : `${question}:`,
+        `${label}\n${bar()}  ${paintTone("›", "brand")} ${masked}`,
       );
     try {
       for (;;) {
@@ -381,8 +424,11 @@ export const readTerminalSecret = async (
         }
       }
     } finally {
-      rewriteRegion(output, written, `${question}:`);
-      output.write("\x1b[0J\n");
+      rewriteRegion(
+        output,
+        written,
+        `${paintTone("◇", "brand")}  ${question} ${paintTone("·".repeat(Math.min(12, [...buffer].length)), "faint")}\n${bar()}`,
+      );
       input.setRawMode?.(false);
       input.pause?.();
     }

@@ -36,6 +36,7 @@ import { createEnvironment, resolveEnvironmentReference } from "./admin";
 import type { ParsedArguments } from "./args";
 import { createSessionStore } from "./auth";
 import { note } from "./components";
+import { createProgress } from "./progress";
 import { describeCliClient } from "./device-describe";
 import { deviceMetadataPath, readDeviceId } from "./device-storage";
 import { CliError, CliInvocationError, sanitizeCliLine } from "./errors";
@@ -1091,6 +1092,21 @@ export const syncWorkflow = async (
   const trustedRevisionId = environmentId;
   const trustedRevisionHash = zeros(48);
   let synced: Awaited<ReturnType<typeof workflow.session.syncAndDecode>>;
+  // Fetching and verifying the history is the slow part of pull, push and
+  // diff, so it gets a spinner on a terminal. Nothing else writes to the
+  // terminal while it runs.
+  const output = options.terminal?.output ?? process.stderr;
+  const showsProgress =
+    !parsed.json &&
+    !options.noInput &&
+    ["pull", "push", "init", "diff"].includes(parsed.command);
+  const progress = createProgress({
+    output,
+    live: (output as { isTTY?: boolean }).isTTY === true,
+    quiet: !showsProgress,
+    transient: parsed.command === "diff",
+  });
+  progress.start("Fetching and verifying the environment's history");
   try {
     synced = await workflow.session.syncAndDecode({
       environmentId,
@@ -1102,6 +1118,7 @@ export const syncWorkflow = async (
       },
     });
   } catch (error) {
+    progress.fail("Couldn't fetch the environment's history");
     if (!(error instanceof UnreadableLaneError)) throw error;
     // A legacy (format 1) lane binds no Environment, so it is applied only
     // from this account or a teammate whose identity was confirmed here
@@ -1122,6 +1139,12 @@ export const syncWorkflow = async (
         : `the Environment's Manifest cannot be decrypted with this Device's Project key grant.\n${SHARE_PROJECT_KEYS_STEP}\nThen run dotrelay pull again.`;
     throw new CliError("incomplete-export", detail, {}, "unreadable_manifest");
   }
+  const count = synced.variables.filter(
+    (variable) => !variable.tombstone,
+  ).length;
+  progress.done(
+    `Verified the history and decrypted ${count} ${count === 1 ? "value" : "values"} on this device`,
+  );
   const page = synced.page;
   const localHead = await readTrustedHead(
     statePath(options.stateDirectory, environmentId),

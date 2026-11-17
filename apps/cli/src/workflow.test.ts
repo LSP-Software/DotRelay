@@ -1954,7 +1954,7 @@ describe("protected CLI workflows", () => {
     expect(result.stdout).toContain('"ok":true');
     expect(result.stdout).not.toContain("postgres://secret");
     const rendered = renderedChunks.join("");
-    expect(rendered).toContain("Classify 1 Variable from .env");
+    expect(rendered).toContain("1 new variable in .env. Who gets each value?");
     expect(rendered).toContain("DATABASE_URL");
     expect(rendered).toContain("Team");
     expect(rendered).toContain("Publish? [y/N]");
@@ -1991,7 +1991,7 @@ describe("protected CLI workflows", () => {
     expect(result.exitCode).toBe(0);
     const rendered = renderedChunks.join("");
     expect(rendered).toContain("API_KEY");
-    expect(rendered).toContain("Only you");
+    expect(rendered).toContain("Only me");
   });
 
   test("push keeps existing Variable ownership and only classifies new names", async () => {
@@ -2255,10 +2255,10 @@ describe("protected CLI workflows", () => {
     expect(revealed.exitCode).toBe(0);
     expect(revealed.stdout).toContain("NEW");
     expect(revealed.stdout).toContain("+  fresh");
-    expect(revealed.stdout).toContain("CHANGED  shared");
+    expect(revealed.stdout).toContain("CHANGED  Team");
     expect(revealed.stdout).toContain("-  prev");
     expect(revealed.stdout).toContain("+  next");
-    expect(revealed.stdout).toContain("GONE  shared");
+    expect(revealed.stdout).toContain("GONE  Team");
     expect(revealed.stdout).toContain("-  old");
     const matching = await run(
       [
@@ -2293,7 +2293,7 @@ describe("protected CLI workflows", () => {
       runtime,
     );
     expect(unchanged.exitCode).toBe(0);
-    expect(unchanged.stdout).toContain("Your .env matches the Environment");
+    expect(unchanged.stdout).toContain("Your .env matches the environment");
   });
 
   test("push confirmation describes the changed Variable instead of the live count", async () => {
@@ -2728,7 +2728,7 @@ describe("protected CLI workflows", () => {
     );
     expect(pulled.exitCode).toBe(0);
     expect(questions).toEqual([]);
-    expect(pulled.stdout).toBe("No changes found\n");
+    expect(pulled.stdout).toBe("└  No changes found\n");
     expect(await Bun.file(input).text()).toBe(
       "DATABASE_URL=postgres://secret\n",
     );
@@ -2918,7 +2918,7 @@ describe("protected CLI workflows", () => {
       { ...runtime, gitTrackingProbe: gitOutside },
     );
     expect(unchanged.exitCode).toBe(0);
-    expect(unchanged.stdout).toBe("No changes found\n");
+    expect(unchanged.stdout).toBe("└  No changes found\n");
     expect(await Bun.file(output).text()).toBe(written);
   });
 
@@ -6062,7 +6062,8 @@ describe("peer grant provisioning during ordinary reads", () => {
     // truthfully on the terminal instead of aborting or hiding it.
     expect(history.stdout).toContain(`Environment ${ids.environment}`);
     expect(history.stdout).toContain("No Revisions have been published yet");
-    expect(rendered.join("")).toContain(
+    // Notes wrap onto the rail; the words stay in order.
+    expect(rendered.join("").replace(/\n│ +/g, " ")).toContain(
       `Device ${peerDeviceId} is missing the Project epoch grant`,
     );
     const scriptedJson = scriptGrantBootstrap(runtime, respond);

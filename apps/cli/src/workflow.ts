@@ -310,7 +310,7 @@ export const runProtectedWorkflow = async (
       );
       const question = `Reveal ${entries.length} decrypted Values to stdout? [y/N]`;
       const frame = reviewFrame({
-        title: `Review — reveal values to stdout`,
+        title: "Print decrypted values to this terminal",
         danger: true,
         body: [
           kv(destinationRows(destination), 14),
@@ -387,7 +387,7 @@ export const runProtectedWorkflow = async (
           );
           const question = pullConfirmQuestion(outputPath);
           const frame = reviewFrame({
-            title: `Review — replace ${outputPath}`,
+            title: `Replace ${outputPath} with the environment's values`,
             danger: true,
             body: reviewBody(changes, destination, parsed.reveal, [
               ...pullReplacementNotes(outputPath, unpushed),

@@ -182,7 +182,7 @@ describe("CLI foundation", () => {
     const result = await run(["--insecure", "--help"]);
     expect(result.exitCode).toBe(2);
     expect(result.stderr).toBe(
-      "  ✖  Invalid invocation\n\n     --insecure is not supported\n\n",
+      "■  Invalid invocation\n│  --insecure is not supported\n└\n\n",
     );
   });
 
@@ -1377,7 +1377,11 @@ describe("protected command Environment selection", () => {
       });
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toBe("\n");
-      expect(renderedChunks.join("")).toBe("  dotrelay pull\n\n");
+      // No prompt: the run opens, fetches, and offers no Environment.
+      const rendered = renderedChunks.join("");
+      expect(rendered.startsWith("┌  dotrelay pull\n│\n")).toBe(true);
+      expect(rendered).not.toContain("◆");
+      expect(rendered).not.toContain("legacy");
       expect(
         fixture.requests.some(
           (request) =>
@@ -3275,12 +3279,16 @@ describe("CLI sign-in display", () => {
       expect(opened).toEqual([]);
       const output = captured.text();
       expect(output).toContain(`${loginOrigin}/device?user_code=KITE-MOSS`);
-      expect(output).toContain("Code   KITE-MOSS");
+      expect(output).toContain("code  KITE-MOSS");
       expect(output).toContain("in 10 minutes");
-      expect(output).toContain("Open the URL above to complete sign-in");
-      expect(result.stdout).toContain("Signed in to relay. Device enrolled.");
-      expect(result.stdout).toContain("RECOVERY CODE — SAVE THIS NOW");
-      expect(result.stdout).toContain("without it or another unlocked device");
+      expect(output).toContain("Open the link above to sign in with GitHub");
+      expect(result.stdout).toContain(
+        "Signed in to relay. This device is enrolled.",
+      );
+      expect(result.stdout).toContain("Save your recovery code now");
+      expect(result.stdout).toContain(
+        "Without this code or another unlocked device",
+      );
       expect(fixture.bootstrapCount()).toBe(1);
     } finally {
       await fixture.cleanup();
@@ -3304,7 +3312,9 @@ describe("CLI sign-in display", () => {
         },
       );
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("Signed in to relay. Device enrolled.");
+      expect(result.stdout).toContain(
+        "Signed in to relay. This device is enrolled.",
+      );
       expect(fixture.bootstrapCount()).toBe(1);
       const enrolled = fixture.enrolledDeviceId();
       expect(enrolled).not.toBe(loginDeviceId);
@@ -3366,7 +3376,7 @@ describe("CLI sign-in display", () => {
       );
       expect(second.exitCode).toBe(0);
       expect(second.stdout).toContain(
-        "Signed in to relay. Device already enrolled.",
+        "Signed in to relay. This device was already enrolled.",
       );
       expect(fixture.bootstrapCount()).toBe(1);
       expect(fixture.enrolledDeviceId()).toBe(firstDeviceId);
@@ -3465,11 +3475,11 @@ describe("CLI sign-in display", () => {
       expect(result.exitCode).toBe(0);
       const output = captured.text();
       expect(output).toContain(`${loginOrigin}/device?user_code=KITE-MOSS`);
-      expect(output).toContain("Code   KITE-MOSS");
+      expect(output).toContain("code  KITE-MOSS");
       expect(output).toContain(
-        "Could not open a browser automatically; open the URL above in any browser.",
+        "Couldn't open a browser here. Open the link above in any browser.",
       );
-      expect(output).toContain("Open the URL above to complete sign-in");
+      expect(output).toContain("Open the link above to sign in with GitHub");
     } finally {
       await fixture.cleanup();
     }
@@ -3524,8 +3534,8 @@ describe("CLI sign-in display", () => {
       expect(opened).toEqual([]);
       const output = captured.text();
       expect(output).toContain(`${loginOrigin}/device?user_code=KITE-MOSS`);
-      expect(output).toContain("Code   KITE-MOSS");
-      expect(output).toContain("Open the URL above to complete sign-in");
+      expect(output).toContain("code  KITE-MOSS");
+      expect(output).toContain("Open the link above to sign in with GitHub");
     } finally {
       await fixture.cleanup();
     }
@@ -3582,7 +3592,9 @@ describe("CLI sign-in display", () => {
         },
       );
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("Signed in to relay. Device enrolled.");
+      expect(result.stdout).toContain(
+        "Signed in to relay. This device is enrolled.",
+      );
       const output = captured.text();
       expect(output).toContain(
         "The Server Profile is unreachable; retry 1 — next in 1s",
@@ -3763,7 +3775,7 @@ describe("CLI sign-in display", () => {
         },
       );
       expect(result.exitCode).toBe(6);
-      expect(captured.text()).toContain("Sign in to relay");
+      expect(captured.text()).toContain("code  KITE-MOSS");
       // The last write to the terminal is the region clear, not a stale
       // card: nothing of the waiting state survives after the failure.
       expect(captured.text().endsWith("\x1b[0J\n")).toBe(true);
@@ -3796,8 +3808,8 @@ describe("CLI sign-in display", () => {
       });
       expect(result.exitCode).toBe(0);
       const output = captured.text();
-      expect(output).toContain("Waiting for the browser");
-      expect(output).toContain("Waiting for the browser — 1s");
+      expect(output).toContain("Waiting for GitHub in your browser");
+      expect(output).toMatch(/Waiting for GitHub in your browser +1s/);
     } finally {
       if (wasTty === undefined) delete ttyOutput.isTTY;
       else ttyOutput.isTTY = wasTty;
@@ -4103,7 +4115,7 @@ describe("status verifies the session and this Device", () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("expired or revoked");
       expect(result.stdout).not.toContain("Signed in");
-      expect(result.stdout).toContain("Next: dotrelay login");
+      expect(result.stdout).toContain("next  dotrelay login");
       expect(fixture.requests).toHaveLength(1);
       expect(fixture.requests[0]?.path).toBe("/api/v1/session");
     } finally {
@@ -4129,12 +4141,10 @@ describe("status verifies the session and this Device", () => {
       });
       expect(result.exitCode).toBe(0);
       expect(attempts).toBeGreaterThan(0);
-      expect(result.stdout).toContain(
-        "The Server Profile could not be reached",
-      );
-      expect(result.stdout).toContain("signed in · not verified");
-      expect(result.stdout).toContain("last known · not verified");
-      expect(result.stdout).toContain("Next: retry dotrelay status");
+      expect(result.stdout).toContain("Couldn't reach relay.example");
+      expect(result.stdout).toContain("● signed in, not checked");
+      expect(result.stdout).toContain("● last known, not checked");
+      expect(result.stdout).toContain("next  dotrelay status");
       const json = await run(["status", "--json"], {
         ...statusRuntime(state),
         fetch: async () => {
@@ -4338,11 +4348,11 @@ describe("status verifies the session and this Device", () => {
         fetch: fetchUnreadableBoundary,
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("signed in · verified");
+      expect(result.stdout).toMatch(/● signed in\n/);
       expect(result.stdout).toContain(
-        "The Server Profile could not complete the Device check",
+        "relay.example answered but couldn't check this device",
       );
-      expect(result.stdout).toContain("Next: retry dotrelay status");
+      expect(result.stdout).toContain("next  dotrelay status");
       const json = await run(["status", "--json"], {
         ...statusRuntime(state),
         fetch: fetchUnreadableBoundary,
@@ -4379,12 +4389,10 @@ describe("status verifies the session and this Device", () => {
         fetch: fetchBoundaryOffline,
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("signed in · verified");
-      expect(result.stdout).toContain(
-        "The Server Profile could not be reached",
-      );
-      expect(result.stdout).toContain("last known · not verified");
-      expect(result.stdout).toContain("Next: retry dotrelay status");
+      expect(result.stdout).toMatch(/● signed in\n/);
+      expect(result.stdout).toContain("Couldn't reach relay.example");
+      expect(result.stdout).toContain("● last known, not checked");
+      expect(result.stdout).toContain("next  dotrelay status");
       const json = await run(["status", "--json"], {
         ...statusRuntime(state),
         fetch: fetchBoundaryOffline,
@@ -4437,7 +4445,7 @@ describe("status verifies the session and this Device", () => {
       );
       expect(boundaryProbe?.path).toBe("/api/v1/workspace/boundary");
       const card = await run(["status"], statusRuntime(state));
-      expect(card.stdout).toContain("legacy-env · not verified");
+      expect(card.stdout).toMatch(/env +legacy-env +● not checked/);
     } finally {
       fixture.stop();
       await state.cleanup();
@@ -4709,8 +4717,10 @@ describe("actionable error categories at the process boundary", () => {
           runtime,
         );
         expect(human.exitCode).toBe(6);
+        // The card wraps long steps onto the rail; the words stay in order.
+        const unwrapped = human.stderr.replace(/\n│ +/g, " ");
         for (const line of (diagnostic.detail as string).split("\n"))
-          expect(human.stderr).toContain(line);
+          expect(unwrapped).toContain(line);
         expect(human.stdout).toBe("");
         expect(result.stdout).toBe("");
       }

@@ -47,7 +47,7 @@ describe("CLI value diffs", () => {
         },
         { indent: "" },
       ),
-    ).toEqual(["API_KEY  user-defined"]);
+    ).toEqual(["API_KEY  Only me"]);
     expect(
       renderValueDiff(
         {
@@ -82,13 +82,13 @@ describe("CLI value diffs", () => {
         { name: "CHANGED", kind: "updated", ownership: "shared" },
         { indent: "" },
       ),
-    ).toBe("CHANGED  shared  updated");
+    ).toBe("CHANGED  Team  updated");
     expect(
       renderMaskedChange(
         { name: "GONE", kind: "removed", ownership: "user-defined" },
         { indent: "" },
       ),
-    ).toBe("GONE  user-defined  removed");
+    ).toBe("GONE  Only me  removed");
   });
 
   test("labels empty and unset Values only when revealed", () => {
@@ -141,14 +141,16 @@ describe("CLI value diffs", () => {
       ]),
     ).toBe(
       [
-        "  dotrelay diff",
-        "",
-        "1 added, 1 updated, 1 removed",
-        "",
-        "Variable  Ownership     Change",
-        "  CHANGED   shared        updated",
-        "  NEW       —             added",
-        "  GONE      user-defined  removed",
+        "┌  dotrelay diff",
+        "│",
+        "◇  3 differences from the environment  1 added, 1 updated, 1 removed",
+        "│",
+        "│     Variable  Who      Change",
+        "│  ~  CHANGED   Team     updated",
+        "│  +  NEW       —        added",
+        "│  −  GONE      Only me  removed",
+        "│",
+        "└  Values are hidden. Add --reveal to see them.",
         "",
       ].join("\n"),
     );
@@ -183,19 +185,21 @@ describe("CLI value diffs", () => {
       ),
     ).toBe(
       [
-        "  dotrelay diff",
-        "",
-        "1 added, 1 updated, 1 removed",
-        "",
-        "CHANGED  shared",
-        "-  prev",
-        "+  next",
-        "",
-        "NEW",
-        "+  fresh",
-        "",
-        "GONE  user-defined",
-        "-  old",
+        "┌  dotrelay diff",
+        "│",
+        "◇  3 differences from the environment  1 added, 1 updated, 1 removed",
+        "│",
+        "│  CHANGED  Team",
+        "│  -  prev",
+        "│  +  next",
+        "│",
+        "│  NEW",
+        "│  +  fresh",
+        "│",
+        "│  GONE  Only me",
+        "│  -  old",
+        "│",
+        "└",
         "",
       ].join("\n"),
     );
@@ -204,9 +208,9 @@ describe("CLI value diffs", () => {
   test("diff with no changes reports an exact match", () => {
     expect(renderEnvDiff([])).toBe(
       [
-        "  dotrelay diff",
-        "",
-        "  ✓  Your .env matches the Environment",
+        "┌  dotrelay diff",
+        "│",
+        "└  Your .env matches the environment",
         "",
       ].join("\n"),
     );
@@ -227,8 +231,8 @@ describe("CLI value diffs", () => {
       [
         "1 updated",
         "",
-        "Variable      Ownership  Change",
-        "  DATABASE_URL  shared     updated",
+        "     Variable      Who   Change",
+        "  ~  DATABASE_URL  Team  updated",
         "",
         ...destinationKv,
       ].join("\n"),
@@ -237,7 +241,7 @@ describe("CLI value diffs", () => {
       [
         "1 updated",
         "",
-        "  DATABASE_URL  shared",
+        "  DATABASE_URL  Team",
         "  -  postgres://secret",
         "  +  abc",
         "",
@@ -246,25 +250,23 @@ describe("CLI value diffs", () => {
     );
     expect(
       reviewFrame({
-        title: `Review — publish to ${destination.environment}`,
+        title: `Publish to ${destination.environment}`,
         body: reviewBody(changes, destination, false),
         question: publicationConfirmQuestion(),
       }),
     ).toBe(
       [
-        "─".repeat(40),
-        `  Review — publish to ${destination.environment}`,
-        "",
-        "  1 updated",
-        "",
-        "  Variable      Ownership  Change",
-        "    DATABASE_URL  shared     updated",
-        "",
-        "    Profile        relay",
-        "    Environment    development",
-        "",
-        "  Publish? [y/N]",
-        "─".repeat(40),
+        `◇  Publish to ${destination.environment}`,
+        "│",
+        "│  1 updated",
+        "│",
+        "│     Variable      Who   Change",
+        "│  ~  DATABASE_URL  Team  updated",
+        "│",
+        "│  Profile        relay",
+        "│  Environment    development",
+        "│",
+        "◆  Publish? [y/N]",
       ].join("\n"),
     );
     expect(
@@ -292,9 +294,9 @@ describe("CLI value diffs", () => {
       [
         "1 added, 1 removed",
         "",
-        "Variable   Ownership     Change",
-        "  NEW_TOKEN  shared        added",
-        "  API_KEY    user-defined  removed",
+        "     Variable   Who      Change",
+        "  +  NEW_TOKEN  Team     added",
+        "  −  API_KEY    Only me  removed",
         "",
         ...destinationKv,
       ].join("\n"),
@@ -318,8 +320,8 @@ describe("CLI value diffs", () => {
       [
         "1 updated",
         "",
-        "Variable      Ownership  Change",
-        "  DATABASE_URL  shared     updated",
+        "     Variable      Who   Change",
+        "  ~  DATABASE_URL  Team  updated",
         "",
         ...destinationKv,
       ].join("\n"),
@@ -328,7 +330,7 @@ describe("CLI value diffs", () => {
       [
         "1 updated",
         "",
-        "  DATABASE_URL  shared",
+        "  DATABASE_URL  Team",
         "  -  postgres://secret",
         "  +  abc",
         "",
@@ -408,10 +410,10 @@ describe("CLI value diffs", () => {
       [
         "1 added, 1 updated, 1 removed",
         "",
-        "Variable      Ownership     Change",
-        "  DATABASE_URL  shared        updated",
-        "  GONE          —             removed",
-        "  API_KEY       user-defined  added",
+        "     Variable      Who      Change",
+        "  ~  DATABASE_URL  Team     updated",
+        "  −  GONE          —        removed",
+        "  +  API_KEY       Only me  added",
         "",
         ...destinationKv,
       ].join("\n"),
@@ -420,14 +422,14 @@ describe("CLI value diffs", () => {
       [
         "1 added, 1 updated, 1 removed",
         "",
-        "  DATABASE_URL  shared",
+        "  DATABASE_URL  Team",
         "  -  postgres://local",
         "  +  postgres://secret",
         "",
         "  GONE",
         "  -  old",
         "",
-        "  API_KEY  user-defined",
+        "  API_KEY  Only me",
         "  +  tok",
         "",
         ...destinationKv,
@@ -447,7 +449,9 @@ describe("pull replacement notes", () => {
         { name: "LOCAL_ONLY", kind: "added" },
       ]),
     );
-    expect(text).toContain("Local changes not yet pushed — will be lost:");
+    expect(text).toContain(
+      "Changes you haven't pushed. This pull replaces them:",
+    );
     expect(text).toContain("API_TOKEN  edited locally");
     expect(text).toContain("LOCAL_ONLY  added locally");
     expect(text).toContain("dotrelay push first");
@@ -458,7 +462,7 @@ describe("pull replacement notes", () => {
 
   test("says when unpushed edits cannot be told apart", () => {
     const text = plain(pullReplacementNotes(".env", null));
-    expect(text).toContain("No Publication Baseline is recorded for .env");
+    expect(text).toContain("No pull has been recorded for .env");
     expect(text).not.toContain("will be lost");
   });
 });

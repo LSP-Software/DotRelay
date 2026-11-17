@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import {
   accountFingerprint,
   createAccountDeviceRoster,
@@ -1712,6 +1713,174 @@ describe("team leave and account lifecycle", () => {
     } finally {
       server.stop();
       await state.cleanup();
+    }
+  });
+});
+
+describe("guided runs offer the fix and carry on", () => {
+  const captureTerminal = () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const chunks: string[] = [];
+    output.on("data", (chunk) => chunks.push(String(chunk)));
+    return { terminal: { input, output }, text: () => chunks.join("") };
+  };
+
+  test("a signed-out run explains, offers sign-in, and ends with the command when declined", async () => {
+    const server = startServer([]);
+    const state = await seedState(server.pin, { session: false });
+    const questions: string[] = [];
+    const captured = captureTerminal();
+    try {
+      const result = await run(["team", "list"], {
+        ...state.runtime,
+        terminal: captured.terminal,
+        guide: true,
+        confirm: async (question) => {
+          questions.push(question);
+          return false;
+        },
+      });
+      expect(result.exitCode).toBe(6);
+      expect(questions).toEqual(["Sign in with GitHub?"]);
+      const host = new URL(server.origin).host;
+      expect(captured.text()).toContain(`▲  You're signed out of ${host}`);
+      expect(captured.text()).toContain(
+        "Sign in with GitHub, then dotrelay team list carries on.",
+      );
+      expect(result.stderr).toBe("└  next  dotrelay login\n");
+    } finally {
+      server.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("a dropped connection offers a retry and the same run carries on", async () => {
+    const server = startServer([]);
+    const state = await seedState(server.pin);
+    const questions: string[] = [];
+    const captured = captureTerminal();
+    let dropped = false;
+    try {
+      const result = await run(["team", "list"], {
+        ...state.runtime,
+        terminal: captured.terminal,
+        guide: true,
+        fetch: async (input, init) => {
+          const url = new URL(
+            input instanceof Request ? input.url : String(input),
+          );
+          if (url.pathname === "/api/v1/teams" && !dropped) {
+            dropped = true;
+            throw new TypeError("fetch failed");
+          }
+          return fetch(input, init);
+        },
+        confirm: async (question) => {
+          questions.push(question);
+          return true;
+        },
+      });
+      expect(result.exitCode).toBe(0);
+      expect(questions).toEqual(["Try again?"]);
+      expect(captured.text()).toContain("Couldn't reach");
+      expect(captured.text()).toContain("Nothing was changed.");
+      expect(result.stdout).toContain("Platform");
+      // The resumed run doesn't open a second rail.
+      expect(result.stdout.match(/┌ {2}dotrelay team list/g)).toHaveLength(1);
+    } finally {
+      server.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("an offer is made once; a second failure of the same kind stops", async () => {
+    const server = startServer([]);
+    const state = await seedState(server.pin);
+    const questions: string[] = [];
+    const captured = captureTerminal();
+    try {
+      const result = await run(["team", "list"], {
+        ...state.runtime,
+        terminal: captured.terminal,
+        guide: true,
+        fetch: async () => {
+          throw new TypeError("fetch failed");
+        },
+        confirm: async (question) => {
+          questions.push(question);
+          return true;
+        },
+      });
+      expect(questions).toEqual(["Try again?"]);
+      expect(result.exitCode).toBe(7);
+      expect(result.stderr).toContain("■  Couldn't reach");
+    } finally {
+      server.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("scripts get the same headline, a stable code and the exact next command", async () => {
+    const server = startServer([]);
+    const state = await seedState(server.pin, { session: false });
+    try {
+      const json = await run(["team", "list", "--json"], {
+        ...state.runtime,
+        guide: true,
+        confirm: async () => {
+          throw new Error("--json must never prompt");
+        },
+      });
+      expect(json.exitCode).toBe(6);
+      expect(JSON.parse(json.stderr)).toMatchObject({
+        ok: false,
+        code: "authentication_required",
+        exitCode: 6,
+        next: "dotrelay login",
+      });
+      // Piped or in CI: no prompt, the same headline and next command.
+      const human = await run(["team", "list"], {
+        ...state.runtime,
+        guide: false,
+        confirm: async () => {
+          throw new Error("an unguided run must never prompt");
+        },
+      });
+      expect(human.exitCode).toBe(6);
+      expect(human.stderr).toContain("You're signed out of");
+      expect(human.stderr).toContain("└  next  dotrelay login");
+    } finally {
+      server.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("a machine with no server says so and names setup", async () => {
+    const stateDirectory = await mkdtemp(join(tmpdir(), "dotrelay-guided-"));
+    try {
+      const result = await run(["pull", "--json"], {
+        profilePath: join(stateDirectory, "profiles.json"),
+        stateDirectory,
+      });
+      expect(result.exitCode).toBe(2);
+      expect(JSON.parse(result.stderr)).toMatchObject({
+        code: "profile_not_selected",
+        next: "dotrelay setup https://api.dotrelay.dev",
+      });
+      const human = await run(["pull"], {
+        profilePath: join(stateDirectory, "profiles.json"),
+        stateDirectory,
+        guide: false,
+      });
+      expect(human.stderr).toContain(
+        "■  DotRelay isn't set up on this machine yet",
+      );
+      expect(human.stderr).toContain(
+        "└  next  dotrelay setup https://api.dotrelay.dev",
+      );
+    } finally {
+      await rm(stateDirectory, { recursive: true, force: true });
     }
   });
 });

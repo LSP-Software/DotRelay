@@ -506,8 +506,11 @@ export const resolveServerProfile = async (
   }
   const name = override ?? catalog.selected;
   if (!name)
-    throw new CliInvocationError(
+    throw new CliError(
+      "invocation",
       `no Server Profile is selected; run ${setupHint}`,
+      {},
+      "profile_not_selected",
     );
   const profile = catalog.profiles.find((candidate) => candidate.name === name);
   if (!profile)

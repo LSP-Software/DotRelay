@@ -1,3 +1,4 @@
+import { sanitizeCliLine, sanitizeCliText } from "./errors";
 import {
   bold,
   dim,
@@ -8,61 +9,156 @@ import {
   truncate,
   visibleWidth,
 } from "./theme";
-import { sanitizeCliLine, sanitizeCliText } from "./errors";
 
 export type { Tone };
 export { bold, dim, paint, terminalWidth, truncate, visibleWidth };
 
+// The CLI draws each run along a rail down the left edge: a header opens
+// it, every step hangs off it, and the result closes it.
+//
+//   ┌  dotrelay pull
+//   │
+//   ◇  Signed in as maya                 3.8s
+//   ▲  This device needs your account key
+//   │  Send it from a browser you already use.
+//   ◆  Get the key
+//   │  ● From my browser   ○ Recovery code
+//   └  .env · 14 values
 export const GLYPHS = Object.freeze({
-  dot: "●",
-  cursor: "▸",
+  top: "┌",
+  bar: "│",
+  end: "└",
+  done: "◇",
+  active: "◆",
+  warn: "▲",
+  fail: "■",
+  on: "●",
+  off: "○",
   item: "·",
-  check: "✓",
-  warn: "⚠",
-  cross: "✖",
   arrow: "→",
-  rule: "─",
   em: "—",
 });
 
 export type GlyphState = "ok" | "info" | "warn" | "danger" | "idle";
 
-const glyphTone: Record<GlyphState, Tone> = {
-  ok: "brand",
-  info: "info",
-  warn: "warn",
-  danger: "danger",
-  idle: "ghost",
+const glyphFor: Record<GlyphState, readonly [string, Tone]> = {
+  ok: [GLYPHS.done, "brand"],
+  info: [GLYPHS.active, "brand"],
+  warn: [GLYPHS.warn, "warn"],
+  danger: [GLYPHS.fail, "danger"],
+  idle: [GLYPHS.bar, "ghost"],
 };
 
 export const glyph = (state: GlyphState): string => {
-  const character =
-    state === "ok"
-      ? GLYPHS.check
-      : state === "warn"
-        ? GLYPHS.warn
-        : state === "danger"
-          ? GLYPHS.cross
-          : state === "info"
-            ? GLYPHS.arrow
-            : GLYPHS.item;
-  return paint(character, glyphTone[state]);
+  const [character, tone] = glyphFor[state];
+  return paint(character, tone);
 };
 
-export const banner = (
-  title?: string,
-  tagline = "Secure environment relay",
+/** The rail on its own, for a spacer line. */
+export const bar = (): string => paint(GLYPHS.bar, "ghost");
+
+// Text on the rail wraps at the terminal width so a narrow terminal never
+// breaks the rail. A word longer than the room (a URL) stays whole so it
+// can still be copied.
+const wrapToWidth = (text: string, room: number): string[] => {
+  const rows: string[] = [];
+  for (const paragraph of text.split("\n")) {
+    if (visibleWidth(paragraph) <= room) {
+      rows.push(paragraph);
+      continue;
+    }
+    // A numbered or bulleted step wraps under its own text, not its number.
+    const hang = " ".repeat(
+      /^(\d+\.\s|[-•]\s)/.exec(paragraph)?.[0].length ?? 0,
+    );
+    let current = "";
+    for (const word of paragraph.split(" ")) {
+      if (current.length === 0) current = word;
+      else if (visibleWidth(current) + 1 + visibleWidth(word) <= room)
+        current = `${current} ${word}`;
+      else {
+        rows.push(current);
+        current = `${hang}${word}`;
+      }
+    }
+    rows.push(current);
+  }
+  return rows;
+};
+
+const railRoom = (width: number): number => Math.max(20, width - 4);
+
+/** One or more lines of text hanging off the rail. */
+export const railText = (
+  text: string,
+  tone: Tone = "muted",
+  width = terminalWidth(),
+): string =>
+  wrapToWidth(text, railRoom(width))
+    .map((row) =>
+      row.length === 0
+        ? bar()
+        : `${bar()}  ${tone === "fg" ? row : paint(row, tone)}`,
+    )
+    .join("\n");
+
+/** Already-styled lines, each prefixed with the rail. */
+export const railLines = (text: string): string =>
+  text
+    .split("\n")
+    .map((row) =>
+      row.trim().length === 0 ? bar() : `${bar()}  ${row.replace(/^ {2}/, "")}`,
+    )
+    .join("\n");
+
+/** A line with a marker, text, and an optional right-aligned note. */
+export const markLine = (
+  state: GlyphState,
+  text: string,
+  aside?: string,
+  width = terminalWidth(),
 ): string => {
-  const lines = [`${paint(GLYPHS.dot, "brand")}  ${bold("DotRelay")}`];
-  if (title !== undefined) lines.push(`  ${bold(title)}`);
-  if (tagline) lines.push(`  ${paint(tagline, "faint")}`);
+  const [first = "", ...rest] = wrapToWidth(text, railRoom(width));
+  const head = `${glyph(state)}  ${first}`;
+  const withAside =
+    aside && rest.length === 0 && width >= 60
+      ? (() => {
+          const gap = width - 2 - visibleWidth(head) - visibleWidth(aside);
+          return gap > 1
+            ? `${head}${" ".repeat(gap)}${paint(aside, "faint")}`
+            : head;
+        })()
+      : head;
+  return [withAside, ...rest.map((row) => `${bar()}  ${row}`)].join("\n");
+};
+
+/** Seconds with one decimal, for the timing beside a finished step. */
+export const elapsed = (ms: number): string => `${(ms / 1000).toFixed(1)}s`;
+
+/** Opens a run: `┌  dotrelay pull` with the context on the right. */
+export const heading = (command: string, context?: string): string => {
+  const head = `${paint(GLYPHS.top, "ghost")}  ${bold(`dotrelay ${command}`)}`;
+  if (!context) return head;
+  const width = terminalWidth();
+  const tail = sanitizeCliLine(context);
+  const gap = width - 2 - visibleWidth(head) - visibleWidth(tail);
+  return gap > 1 && width >= 60
+    ? `${head}${" ".repeat(gap)}${paint(tail, "faint")}`
+    : `${head}\n${bar()}  ${paint(tail, "faint")}`;
+};
+
+/** The header and the spacer line under it, ready to write. */
+export const openRail = (command: string, context?: string): string =>
+  `${heading(command, context)}\n${bar()}\n`;
+
+/** The version banner shown above help. */
+export const banner = (title?: string, tagline = ""): string => {
+  const lines = [
+    `${paint(GLYPHS.top, "ghost")}  ${bold("dotrelay")}${title ? `  ${paint(title, "muted")}` : ""}`,
+  ];
+  if (tagline) lines.push(`${bar()}  ${paint(tagline, "faint")}`);
   return lines.join("\n");
 };
-
-export const heading = (command: string, context?: string): string =>
-  `  ${bold(`dotrelay ${command}`)}${
-    context ? `  ${paint(`— ${context}`, "faint")}` : ""
-  }`;
 
 export const section = (title: string, tone: Tone = "info"): string =>
   `  ${paint(title, tone)}`;
@@ -74,8 +170,9 @@ export type KvRow = Readonly<{
 }>;
 
 // Row keys and values are plain text, often received from a server, so they
-// are sanitized here before the card applies its own styling.
-export const kv = (rows: readonly KvRow[], keyWidth = 16): string =>
+// are sanitized here before the card applies its own styling. Rows carry a
+// two-space indent; railLines swaps it for the rail.
+export const kv = (rows: readonly KvRow[], keyWidth = 12): string =>
   rows
     .map((row) => {
       const key = pad(truncate(sanitizeCliLine(row.key), keyWidth), keyWidth);
@@ -101,7 +198,7 @@ export const table = (
       ...rows.map((row) => visibleWidth(row[column] ?? GLYPHS.em)),
     ),
   );
-  const cap = Math.min(width - 4, 100);
+  const cap = Math.min(width - 5, 100);
   for (;;) {
     const total = widths.reduce((sum, w) => sum + w + 2, -2);
     if (total <= cap) break;
@@ -126,7 +223,7 @@ export const table = (
     )
     .join("  ");
   const lines = [
-    head,
+    `  ${head}`,
     ...rows.map((row, i) => `  ${cells(row, i).join("  ")}`),
   ];
   return lines.map((line) => line.replace(/[ \t]+$/g, "")).join("\n");
@@ -134,7 +231,7 @@ export const table = (
 
 export const rule = (tone: Tone = "ghost", length?: number): string => {
   const width = length ?? Math.max(24, Math.min(terminalWidth() - 4, 56));
-  return paint(GLYPHS.rule.repeat(width), tone);
+  return paint("─".repeat(width), tone);
 };
 
 export type ReviewOptions = Readonly<{
@@ -145,51 +242,59 @@ export type ReviewOptions = Readonly<{
   readonly width?: number;
 }>;
 
+/**
+ * A change preview that ends in a question. The question line is the
+ * active step; the confirm prompt drawn under it answers it.
+ */
 export const reviewFrame = ({
   title,
   body,
   question,
   danger = false,
-  width = terminalWidth(),
-}: ReviewOptions): string => {
-  const tone: Tone = danger ? "danger" : "ghost";
-  const bodyLines = body.split("\n");
-  const content = [
-    `  ${bold(title, danger ? "danger" : "fg")}`,
-    "",
-    ...bodyLines.map((line) => (line.length > 0 ? `  ${line}` : "")),
-    "",
-    `  ${question}`,
-  ];
-  const longest = Math.max(
-    visibleWidth(`  ${title}`),
-    visibleWidth(`  ${question}`),
-    ...bodyLines.map((line) =>
-      line.length > 0 ? visibleWidth(`  ${line}`) : 0,
-    ),
-  );
-  const ruleLength = Math.max(
-    24,
-    Math.min(width - 4, Math.max(40, longest + 4)),
-  );
-  return [rule(tone, ruleLength), ...content, rule(tone, ruleLength)].join(
-    "\n",
-  );
-};
+}: ReviewOptions): string =>
+  [
+    danger
+      ? markLine("warn", bold(title, "danger")).replace(
+          glyph("warn"),
+          paint(GLYPHS.warn, "danger"),
+        )
+      : markLine("ok", bold(title)),
+    bar(),
+    railLines(body),
+    bar(),
+    // The [y/N] hint stays: a terminal without raw mode answers by typing.
+    markLine("info", question),
+  ].join("\n");
 
-export const stepLine = (label: string, state: GlyphState = "ok"): string =>
-  `  ${glyph(state)} ${paint(label, state === "idle" ? "muted" : "fg")}`;
+export const stepLine = (
+  label: string,
+  state: GlyphState = "ok",
+  ms?: number,
+): string =>
+  markLine(
+    state,
+    paint(label, state === "idle" ? "muted" : "fg"),
+    ms === undefined ? undefined : elapsed(ms),
+  );
 
-export const stepDone = (label: string): string => stepLine(label, "ok");
+export const stepDone = (label: string, ms?: number): string =>
+  stepLine(label, "ok", ms);
 export const stepFail = (label: string): string => stepLine(label, "danger");
 
+/** Closes a run: `└  text`. */
 export const epilogue = (text: string, tone: Tone = "brand"): string =>
-  `  ${paint(text, tone)}`;
+  `${paint(GLYPHS.end, "ghost")}  ${paint(text, tone)}`;
 
 // Notes often name Variables or carry server text, so control sequences are
-// stripped before the text reaches the terminal.
+// stripped before the text reaches the terminal. A warning note is marked
+// so it stands out from the rail.
 export const note = (text: string, tone: Tone = "faint"): string =>
-  `  ${paint(GLYPHS.item, "ghost")}  ${paint(sanitizeCliText(text), tone)}`;
+  tone === "warn" || tone === "danger"
+    ? markLine(
+        tone === "warn" ? "warn" : "danger",
+        paint(sanitizeCliText(text), tone),
+      )
+    : railText(sanitizeCliText(text), tone);
 
 export type StatusFooter = Readonly<{
   readonly state: GlyphState;
@@ -200,36 +305,39 @@ export const statusCard = (
   rows: readonly KvRow[],
   footer?: StatusFooter,
   title = "status",
+  context?: string,
 ): string =>
   [
-    banner(title),
-    "",
-    kv(rows),
-    ...(footer
-      ? [
-          "",
-          `  ${glyph(footer.state)}  ${
-            footer.state === "ok" ? paint(footer.text, "brand") : footer.text
-          }`,
-        ]
-      : []),
-    "",
+    heading(title, context),
+    bar(),
+    railLines(kv(rows)),
+    ...(footer ? [bar(), markLine(footer.state, footer.text)] : []),
   ].join("\n");
 
 export type ErrorCard = Readonly<{
   readonly title: string;
   readonly detail: string;
   readonly fixes?: readonly string[];
+  /** The exact command that moves things forward, when there is one. */
+  readonly next?: string | undefined;
 }>;
 
-export const errorCard = ({ title, detail, fixes = [] }: ErrorCard): string =>
+export const errorCard = ({
+  title,
+  detail,
+  fixes = [],
+  next,
+}: ErrorCard): string =>
   [
-    `  ${glyph("danger")}  ${bold(title, "danger")}`,
-    "",
-    `     ${detail}`,
-    ...(fixes.length > 0
-      ? ["", ...fixes.map((fix) => `  ${glyph("info")}  ${fix}`)]
-      : []),
+    markLine("danger", bold(title, "danger")),
+    railText(detail, "fg"),
+    ...fixes.map((fix) => railText(fix, "muted")),
+    ...(next
+      ? [
+          bar(),
+          `${paint(GLYPHS.end, "ghost")}  ${paint("next", "faint")}  ${bold(next)}`,
+        ]
+      : [`${paint(GLYPHS.end, "ghost")}`]),
     "",
   ].join("\n");
 
@@ -249,79 +357,94 @@ export type SelectionRow = Readonly<{
   readonly detail?: string | undefined;
 }>;
 
-export const selectionTitle = (title: string): string => `  ${bold(title)}`;
+/** The question of an open prompt: the active marker and the question. */
+export const selectionTitle = (title: string): string =>
+  markLine("info", sanitizeCliLine(title));
 
 // Selection labels and details are plain text, often server-supplied names
 // (Teams, Projects, Environments), so they are sanitized before styling.
 export const selectionRow = (row: SelectionRow, cursor: boolean): string => {
   const marker = cursor
-    ? paint(GLYPHS.cursor, "brand")
-    : paint(GLYPHS.item, "ghost");
+    ? paint(GLYPHS.on, "brand")
+    : paint(GLYPHS.off, "faint");
   const text = sanitizeCliLine(row.label);
-  const label = cursor ? bold(text) : paint(text, "muted");
+  const label = cursor ? text : paint(text, "muted");
   const detail = row.detail ? paint(sanitizeCliLine(row.detail), "faint") : "";
-  return `    ${marker}  ${label}${detail ? `  ${detail}` : ""}`;
+  return `${bar()}  ${marker} ${label}${detail ? `  ${detail}` : ""}`;
 };
 
 export const selectionHint = (interactive: boolean): string =>
-  `     ${paint(
-    interactive ? "↑↓ navigate · Enter select · Esc cancel" : "Enter a number",
-    "faint",
-  )}`;
+  `${bar()}  ${paint(interactive ? "↑↓ enter" : "Enter a number", "ghost")}`;
 
 export const numberedRow = (index: number, row: SelectionRow): string =>
-  `    ${pad(`${index}.`, 3)}  ${paint(sanitizeCliLine(row.label), "muted")}${
+  `${bar()}  ${pad(`${index}.`, 3)} ${paint(sanitizeCliLine(row.label), "muted")}${
     row.detail ? `  ${paint(sanitizeCliLine(row.detail), "faint")}` : ""
   }`;
 
 export const numberedHint = (allowsDefault: boolean): string =>
-  `     ${paint(
+  `${bar()}  ${paint(
     allowsDefault
       ? "Enter a number, or press Enter for the first option"
       : "Enter a number",
     "faint",
   )}`;
 
+/** A settled prompt: `◇  Question  answer`, then the rail. */
+export const selectionResult = (title: string, answer: string): string =>
+  `${markLine("ok", `${sanitizeCliLine(title)} ${paint(sanitizeCliLine(answer), "faint")}`)}\n${bar()}`;
+
 // A confirmation question may carry the typed-answer hint ("Publish? [y/N]");
-// the boxed Yes/No choice replaces that hint, so it is stripped for display.
+// the toggle replaces that hint, so it is stripped for display.
 export const stripConfirmSuffix = (question: string): string =>
   question.replace(/\s*\[[yY]\/[nN]\]\s*$/, "").trimEnd();
 
 export const confirmHint = (): string =>
-  `     ${paint("↑↓ navigate · Enter confirm · Esc decline", "faint")}`;
+  `${bar()}  ${paint("←→ enter · y/n", "ghost")}`;
 
-export const confirmRows = (cursor: number): string =>
-  [
-    selectionRow({ label: "Yes" }, cursor === 0),
-    selectionRow({ label: "No" }, cursor === 1),
-  ].join("\n");
+/** A one-line toggle: `●  Yes   ○  No`. */
+export const confirmRows = (
+  cursor: number,
+  labels: readonly [string, string] = ["Yes", "No"],
+): string =>
+  `${bar()}  ${labels
+    .map((label, index) =>
+      index === cursor
+        ? `${paint(GLYPHS.on, "brand")} ${label}`
+        : paint(`${GLYPHS.off} ${label}`, "faint"),
+    )
+    .join("   ")}`;
 
 export const confirmBox = (
   question: string,
   cursor: number,
-  width = terminalWidth(),
-): string => {
-  const lines = stripConfirmSuffix(question)
-    .split("\n")
-    .map((line) => (line.length > 0 ? `  ${bold(line)}` : ""));
-  const rows = confirmRows(cursor);
-  const longest = Math.max(
-    ...lines.map((line) => visibleWidth(line)),
-    visibleWidth(rows),
-  );
-  const ruleLength = Math.max(24, Math.min(width - 4, longest + 2));
-  return [
-    rule("ghost", ruleLength),
-    ...lines,
-    "",
-    rows,
-    "",
-    rule("ghost", ruleLength),
+  labels?: readonly [string, string],
+): string =>
+  [
+    ...stripConfirmSuffix(question)
+      .split("\n")
+      .map((line, index) =>
+        index === 0
+          ? markLine("info", line)
+          : line.length > 0
+            ? railText(line, "fg")
+            : bar(),
+      ),
+    confirmRows(cursor, labels),
     confirmHint(),
   ].join("\n");
-};
 
-export const confirmResult = (question: string, accepted: boolean): string =>
-  `  ${glyph(accepted ? "ok" : "danger")}  ${
-    accepted ? paint("Confirmed", "brand") : paint("Declined", "danger")
-  }  ${paint(stripConfirmSuffix(question), "muted")}`;
+export const confirmResult = (
+  question: string,
+  accepted: boolean,
+  labels?: readonly [string, string],
+): string => {
+  const shown = stripConfirmSuffix(question).split("\n")[0] ?? "";
+  // A declined Yes/No approval is marked; turning down an offer with its
+  // own labels ("Not now") is a choice, not a failure.
+  const declinedMark = labels === undefined ? "danger" : "ok";
+  const [yes, no] = labels ?? ["Yes", "No"];
+  return `${markLine(
+    accepted ? "ok" : declinedMark,
+    `${shown} ${paint(accepted ? yes : no, accepted || labels ? "faint" : "danger")}`,
+  )}\n${bar()}`;
+};

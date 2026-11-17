@@ -284,8 +284,8 @@ describe("confirmAction raw TTY", () => {
     expect(shown).toContain("Publish?");
     expect(shown).toContain("Yes");
     expect(shown).toContain("No");
-    expect(shown).toContain("↑↓ navigate · Enter confirm · Esc decline");
-    expect(shown).toContain("Confirmed");
+    expect(shown).toContain("←→ enter · y/n");
+    expect(shown).toContain("◇  Publish? Yes");
     expect(shown).not.toContain("\x1b[2J");
     expect(shown).not.toContain("\x1b[H");
   });
@@ -323,7 +323,7 @@ describe("readTerminalSecret raw TTY", () => {
     input.end();
     expect(await pending).toBe("K4ET-P7Q");
     const shown = await outputText();
-    expect(shown).toContain("Recovery Code:");
+    expect(shown).toContain("◆  Recovery Code");
     expect(shown).toContain("········");
     expect(shown).not.toContain("K4ET-P7Q");
   });
