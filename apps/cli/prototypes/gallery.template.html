@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CLI prototypes</title>
+    <style>
+      :root {
+        --bg: oklch(0.105 0.008 165);
+        --card: oklch(0.145 0.011 165);
+        --term: oklch(0.08 0.006 165);
+        --fg: oklch(0.94 0.008 160);
+        --muted: oklch(0.69 0.015 160);
+        --border: oklch(0.92 0.01 160 / 12%);
+        --green: oklch(0.82 0.17 150);
+        --green-ink: oklch(0.12 0.022 155);
+        --mono:
+          ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+        --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font: 14px/1.5 var(--sans);
+      }
+      main {
+        max-width: 1040px;
+        margin: 0 auto;
+        padding: 32px 16px 64px;
+      }
+      h1 {
+        font-size: 20px;
+        font-weight: 600;
+        margin: 0 0 4px;
+      }
+      .intro {
+        color: var(--muted);
+        margin: 0 0 24px;
+        max-width: 70ch;
+      }
+      .bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+      .bar .name {
+        color: var(--muted);
+        font-size: 12px;
+        width: 76px;
+      }
+      button {
+        font: inherit;
+        font-size: 13px;
+        color: var(--fg);
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        padding: 5px 11px;
+        cursor: pointer;
+      }
+      button:hover {
+        border-color: oklch(0.92 0.01 160 / 28%);
+      }
+      button[aria-pressed="true"] {
+        background: var(--green);
+        color: var(--green-ink);
+        border-color: transparent;
+        font-weight: 600;
+      }
+      .about {
+        color: var(--muted);
+        margin: 18px 0 10px;
+        min-height: 1.5em;
+      }
+      .stage {
+        display: flex;
+        flex-direction: column;
+        gap: 22px;
+      }
+      .term-wrap {
+        overflow-x: auto;
+      }
+      .term-title {
+        font-size: 12px;
+        color: var(--muted);
+        margin: 0 0 6px;
+        display: flex;
+        gap: 12px;
+      }
+      .term-title .exit {
+        font-family: var(--mono);
+      }
+      pre.term {
+        margin: 0;
+        padding: 16px 18px;
+        background: var(--term);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        font: 13px/1.45 var(--mono);
+        color: rgb(231, 237, 233);
+        white-space: pre;
+        width: max-content;
+      }
+      .keys {
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 28px;
+      }
+      kbd {
+        font-family: var(--mono);
+        font-size: 11px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 0 5px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>dotrelay CLI, three directions</h1>
+      <p class="intro">
+        Recorded from the prototype scripts with fake data; nothing talks to a
+        server. Every direction runs the same six scenes, so you can flip
+        between them. To try one yourself:
+        <code>bun apps/cli/prototypes/run.ts</code>.
+      </p>
+
+      <div class="bar" id="directions"><span class="name">Direction</span></div>
+      <div class="bar" id="scenes"><span class="name">Scene</span></div>
+      <div class="bar" id="options"><span class="name">Terminal</span></div>
+      <div class="bar" id="controls"><span class="name">Playback</span></div>
+
+      <p class="about" id="about"></p>
+      <div class="stage" id="stage"></div>
+      <p class="keys">
+        <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd> direction ·
+        <kbd>←</kbd> <kbd>→</kbd> scene · <kbd>r</kbd> replay ·
+        <kbd>e</kbd> skip to end
+      </p>
+    </main>
+    <script>
+      /*SCREEN*/
+      const CASTS = /*CASTS*/ null;
+      const META = /*META*/ null;
+
+      const state = {
+        direction: "quiet",
+        scene: "first-run",
+        width: 80,
+        color: "color",
+        speed: 1,
+      };
+      let timers = [];
+
+      const button = (label, pressed, onClick) => {
+        const b = document.createElement("button");
+        b.textContent = label;
+        b.setAttribute("aria-pressed", String(pressed));
+        b.addEventListener("click", onClick);
+        return b;
+      };
+
+      const bar = (id, items) => {
+        const el = document.getElementById(id);
+        el.querySelectorAll("button").forEach((b) => b.remove());
+        items.forEach((b) => el.appendChild(b));
+      };
+
+      const renderBars = () => {
+        const dirs = Object.entries(META.directions).map(([id, d]) =>
+          button(d.title, state.direction === id, () => {
+            state.direction = id;
+            update();
+          }),
+        );
+        dirs.push(
+          button("Compare all three", state.direction === "compare", () => {
+            state.direction = "compare";
+            update();
+          }),
+        );
+        bar("directions", dirs);
+        bar(
+          "scenes",
+          META.scenes.map((s) =>
+            button(s.title, state.scene === s.id, () => {
+              state.scene = s.id;
+              update();
+            }),
+          ),
+        );
+        bar("options", [
+          button("80 columns", state.width === 80, () => {
+            state.width = 80;
+            update();
+          }),
+          button("46 columns", state.width === 46, () => {
+            state.width = 46;
+            update();
+          }),
+          button("Colour", state.color === "color", () => {
+            state.color = "color";
+            update();
+          }),
+          button("NO_COLOR", state.color === "mono", () => {
+            state.color = "mono";
+            update();
+          }),
+        ]);
+        bar("controls", [
+          button("Replay", false, () => play()),
+          button("Skip to end", false, () => play(true)),
+          ...[1, 2, 4].map((s) =>
+            button(`${s}×`, state.speed === s, () => {
+              state.speed = s;
+              renderBars();
+              play();
+            }),
+          ),
+        ]);
+      };
+
+      const play = (toEnd = false) => {
+        timers.forEach(clearTimeout);
+        timers = [];
+        const stage = document.getElementById("stage");
+        stage.innerHTML = "";
+        const ids =
+          state.direction === "compare"
+            ? Object.keys(META.directions)
+            : [state.direction];
+        for (const id of ids) {
+          const cast =
+            CASTS[`${id}/${state.scene}/${state.width}/${state.color}`];
+          const wrap = document.createElement("div");
+          wrap.className = "term-wrap";
+          const title = document.createElement("p");
+          title.className = "term-title";
+          title.innerHTML = `<span>${META.directions[id].title}</span><span class="exit"></span>`;
+          const pre = document.createElement("pre");
+          pre.className = "term";
+          pre.style.minWidth = `calc(${cast.width}ch + 36px)`;
+          pre.style.minHeight = `calc(${cast.rows} * 1.45em + 32px)`;
+          wrap.append(title, pre);
+          stage.appendChild(wrap);
+          const screen = createScreen();
+          const show = () => {
+            pre.innerHTML = screen.html();
+          };
+          const finish = () => {
+            title.querySelector(".exit").textContent = `exit ${cast.exit}`;
+          };
+          if (toEnd) {
+            cast.events.forEach(([, d]) => screen.feed(d));
+            show();
+            finish();
+            continue;
+          }
+          cast.events.forEach(([t, d], i) => {
+            timers.push(
+              setTimeout(
+                () => {
+                  screen.feed(d);
+                  show();
+                  if (i === cast.events.length - 1) finish();
+                },
+                (t * 1000) / state.speed,
+              ),
+            );
+          });
+        }
+      };
+
+      const update = () => {
+        renderBars();
+        document.getElementById("about").textContent =
+          state.direction === "compare"
+            ? "All three directions playing the same scene."
+            : META.directions[state.direction].about;
+        play();
+      };
+
+      document.addEventListener("keydown", (e) => {
+        const dirs = [...Object.keys(META.directions), "compare"];
+        const scenes = META.scenes.map((s) => s.id);
+        if (/^[1-4]$/.test(e.key)) {
+          state.direction = dirs[Number(e.key) - 1];
+          update();
+        } else if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+          const i =
+            scenes.indexOf(state.scene) + (e.key === "ArrowRight" ? 1 : -1);
+          state.scene = scenes[(i + scenes.length) % scenes.length];
+          update();
+        } else if (e.key === "r") play();
+        else if (e.key === "e") play(true);
+      });
+
+      update();
+    </script>
+  </body>
+</html>
