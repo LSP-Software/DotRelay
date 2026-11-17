@@ -77,6 +77,34 @@ the `latest` flavor instead: that binary targets no origin, so a new machine sti
 `dotrelay setup <origin>` (for the hosted service, `https://api.dotrelay.dev`). A dev build that
 also needs the hosted service adds it with `dotrelay profile add` and `dotrelay profile use`.
 
+## Updates
+
+`dotrelay update` installs the newest version on the binary's own track: a stable release follows
+the npm `latest` tag, a dev build follows the `dev` tag, and a prerelease follows the tag named by
+its first identifier (`1.2.0-alpha.3` follows `alpha`). A prerelease also considers `latest`,
+where prereleases are published until the first stable release, so it moves on to its stable
+release once that is newer. Dev and release builds never cross over. It reads the tag from the npm registry
+(`registry.npmjs.org`), never from the GitHub API. How it installs depends on where the running
+binary came from:
+
+- A global npm or bun install is updated by running `npm install --global @dotrelay/cli@<version>`
+  or `bun add --global @dotrelay/cli@<version>`.
+- A standalone binary from the install scripts is replaced with the release archive from GitHub,
+  checked against the release's `SHA256SUMS` like the install scripts do. The new binary must run
+  and report the expected version before it is renamed over the old one, so a failed update leaves
+  the old binary in place. Dev builds are published only to npm, so a standalone binary can't
+  switch to one.
+- A copy inside a project's `node_modules` is left to the project: the command names the
+  dependency to update.
+- A source build (`0.0.0-foundation`) can't update itself.
+
+Once a day, any other command asks the registry for the newest version in the background, saves
+the answer as `update-check.json` in the state directory, and after the command finishes prints
+`dotrelay <version> is out` with `dotrelay update` as the next step. A failed check is remembered
+for the day too, so an offline machine isn't slowed down. The notice appears only when stderr is a
+terminal, never with `--json`, `--no-input`, `run`, or in CI, and `DOTRELAY_NO_UPDATE_CHECK=1`
+turns the check off. The check never holds a finished command for more than two seconds.
+
 ## First machine and sign-in
 
 The first invocation has no ambient Server Profile. `dotrelay setup <origin>` fetches and verifies
