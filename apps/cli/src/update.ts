@@ -416,6 +416,13 @@ const download = async (
   return new Uint8Array(await response.arrayBuffer());
 };
 
+// A loop rather than /\/+$/, which backtracks on a long run of slashes.
+const withoutTrailingSlashes = (value: string): string => {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end -= 1;
+  return value.slice(0, end);
+};
+
 const installFailure = (path: string, reason: string): CliError =>
   new CliError(
     "local-io",
@@ -440,9 +447,8 @@ const replaceStandaloneBinary = async (
       `DotRelay doesn't publish a binary for ${platform}-${arch}. See ${RELEASES_URL}.`,
     );
   const environment = dependencies.environment ?? process.env;
-  const base = (environment.DOTRELAY_DOWNLOAD_BASE ?? RELEASES_URL).replace(
-    /\/+$/u,
-    "",
+  const base = withoutTrailingSlashes(
+    environment.DOTRELAY_DOWNLOAD_BASE ?? RELEASES_URL,
   );
   const tag = `v${latest}`;
   const archiveName = `dotrelay-${tag}-${target.target}.${target.archive}`;
@@ -484,7 +490,9 @@ const replaceStandaloneBinary = async (
   );
   try {
     const archivePath = join(workspace, archiveName);
-    await writeFile(archivePath, archive);
+    // Only bytes whose SHA-256 matched the release's SHA256SUMS above reach
+    // the disk, inside a private temporary directory, for tar to extract.
+    await writeFile(archivePath, archive, { mode: 0o600 });
     const extractDirectory = join(workspace, "extract");
     await mkdir(extractDirectory);
     const capture = dependencies.capture ?? defaultCapture;
