@@ -86,7 +86,7 @@ export const renderClassificationBoard = (
     markLine("info", title),
     ...rows,
     railText(
-      "Team: teammates get it when they pull. Only me: each teammate sets their own.",
+      "Team: teammates get it when they pull. Only me: stays private to you; teammates don't get it.",
       "faint",
     ),
     `${bar()}  ${paint(hint, "ghost")}`,

@@ -419,10 +419,11 @@ test("a Member reads every Value but edits only the Values they provided or own"
   await expect(reviewDialog).toBeHidden();
 
   await editor.getByRole("tab", { name: "History" }).click();
+  // History is newest first; the oldest revision is the teammate's.
   await editor
     .getByTestId(/history-revision-/)
     .getByRole("button", { name: "Roll back" })
-    .first()
+    .last()
     .click();
   const rollbackDialog = page.getByRole("dialog", { name: "Roll back" });
   await expect(rollbackDialog).toBeVisible();

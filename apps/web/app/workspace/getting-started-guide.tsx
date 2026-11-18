@@ -232,6 +232,16 @@ export const GettingStartedGuide = ({
           ? "Install the CLI, then create your first team from your repository."
           : "Finish these steps to open your workspace."}
       </p>
+      {!invited && model.steps.some((step) => step.id === "team") ? (
+        <p
+          className="mt-2 max-w-2xl text-sm text-muted-foreground"
+          data-testid="getting-started-join-hint"
+        >
+          Joining a teammate&apos;s team instead? Ask them to invite your GitHub
+          username. The invitation shows up here, and you don&apos;t need to
+          create a team.
+        </p>
+      ) : null}
       <ol className="mt-6 list-none divide-y overflow-hidden rounded-xl border bg-card p-0">
         {model.steps.map((step, index) => {
           const Heading = step.status === "current" ? "h2" : "p";

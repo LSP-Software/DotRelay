@@ -10,6 +10,7 @@ import {
   AccountRosterRepository,
   type DatabaseClient,
   MembershipAdministrationRepository,
+  recordGitHubLogin,
   OperationConflictError,
   sha384Digest,
 } from "@dotrelay/database";
@@ -155,6 +156,7 @@ const membershipLifecycleOrder: Readonly<
 type InvitationView = Readonly<{
   readonly invitationId: string;
   readonly providerSubject: string;
+  readonly githubLogin: string | null;
   readonly createdAt: string;
   readonly expiresAt: string;
 }>;
@@ -274,16 +276,7 @@ const loadTeamMembershipState = async (
   );
   // Logins recorded at sign-in: display data for finding a Member by login,
   // never an identity (the User id and signed roster are).
-  const githubSubjects = [...new Set(rows.map((row) => row.githubSubject))];
-  const logins = new Map(
-    (githubSubjects.length
-      ? await database.gitHubLogin.findMany({
-          where: { githubSubject: { in: githubSubjects } },
-          select: { githubSubject: true, login: true },
-        })
-      : []
-    ).map((entry) => [entry.githubSubject, entry.login]),
-  );
+  // Invitations are read first so their logins come from the same lookup.
   const invitations = privileged
     ? await database.membershipInvitation.findMany({
         where: {
@@ -303,6 +296,21 @@ const loadTeamMembershipState = async (
         take: MAX_LISTED_INVITATIONS,
       })
     : [];
+  const githubSubjects = [
+    ...new Set([
+      ...rows.map((row) => row.githubSubject),
+      ...invitations.map((invitation) => invitation.providerSubject),
+    ]),
+  ];
+  const logins = new Map(
+    (githubSubjects.length
+      ? await database.gitHubLogin.findMany({
+          where: { githubSubject: { in: githubSubjects } },
+          select: { githubSubject: true, login: true },
+        })
+      : []
+    ).map((entry) => [entry.githubSubject, entry.login]),
+  );
   // Each Member's latest Account Device roster (ADR 0015), for fingerprint
   // display and pinning; clients verify it themselves.
   const rosters = await new AccountRosterRepository().latestFor(
@@ -339,6 +347,7 @@ const loadTeamMembershipState = async (
     invitations: invitations.map((invitation) => ({
       invitationId: invitation.id,
       providerSubject: invitation.providerSubject,
+      githubLogin: logins.get(invitation.providerSubject) ?? null,
       createdAt: invitation.createdAt.toISOString(),
       expiresAt: invitation.expiresAt.toISOString(),
     })),
@@ -397,12 +406,20 @@ export const registerMembershipRoutes = (
         login,
         resolutionOptions,
       );
-      if (outcome.code === "resolved")
+      if (outcome.code === "resolved") {
+        // GitHub just confirmed this login for this id, so the Team table
+        // can show "@login" for the invitation instead of a bare number.
+        // Display data only; a failure here must not block the invite.
+        await recordGitHubLogin(database, {
+          githubSubject: outcome.githubUserId,
+          login: outcome.login,
+        }).catch(() => undefined);
         return context.json(
           { login: outcome.login, githubUserId: outcome.githubUserId },
           200,
           { "Cache-Control": "no-store" },
         );
+      }
       if (outcome.code === "github_rate_limited") {
         const problem = createProblem(
           "github_rate_limited",
@@ -541,7 +558,12 @@ export const registerMembershipRoutes = (
           context.req.header("Idempotency-Key"),
         );
         const commandBytes = new TextEncoder().encode(
-          JSON.stringify({ action: "invitation.revoke", teamId, invitationId }),
+          JSON.stringify({
+            action: "invitation.revoke",
+            teamId,
+            invitationId,
+            operationId,
+          }),
         );
         const result = await memberships.revokeInvitation(database, {
           teamId,
@@ -654,11 +676,15 @@ export const registerMembershipRoutes = (
           context.req.header("Idempotency-Key"),
         );
         const commandBytes = new TextEncoder().encode(
+          // Each command names its Idempotency-Key: changing a role back
+          // and forth is a series of new commands, not a conflict with the
+          // first one that had the same fields.
           JSON.stringify({
             action: "membership.change_role",
             teamId,
             membershipId,
             role,
+            operationId,
           }),
         );
         const result = await memberships.changeRole(database, {
@@ -737,7 +763,14 @@ export const registerMembershipRoutes = (
           context.req.header("Idempotency-Key"),
         );
         const commandBytes = new TextEncoder().encode(
-          JSON.stringify({ action: "membership.remove", teamId, membershipId }),
+          // A re-invited member keeps the same Membership row, so removing
+          // them again must not collide with the first removal's command.
+          JSON.stringify({
+            action: "membership.remove",
+            teamId,
+            membershipId,
+            operationId,
+          }),
         );
         const result = await memberships.remove(database, {
           teamId,
@@ -875,7 +908,11 @@ export const registerMembershipRoutes = (
         context.req.header("Idempotency-Key"),
       );
       const commandBytes = new TextEncoder().encode(
-        JSON.stringify({ action: "invitation.decline", invitationId }),
+        JSON.stringify({
+          action: "invitation.decline",
+          invitationId,
+          operationId,
+        }),
       );
       const result = await memberships.declineInvitation(database, {
         invitationId,
@@ -914,7 +951,11 @@ export const registerMembershipRoutes = (
         context.req.header("Idempotency-Key"),
       );
       const commandBytes = new TextEncoder().encode(
-        JSON.stringify({ action: "invitation.accept", invitationId }),
+        JSON.stringify({
+          action: "invitation.accept",
+          invitationId,
+          operationId,
+        }),
       );
       const result = await memberships.accept(database, {
         invitationId,

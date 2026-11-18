@@ -151,7 +151,7 @@ export const rejectForbiddenFlags = (args: readonly string[]): void => {
 
 // A message, then the command's usage on its own line when there is one.
 const withUsage = (message: string, usage: string | undefined): string =>
-  usage ? `${message}\nUsage: ${usage}` : message;
+  usage ? `${message}\nUsage: ${displayUsage(usage)}` : message;
 
 const assignValue = (parsed: MutableArguments, flag: string, value: string) => {
   if (flag === "--profile") parsed.profile = value;
@@ -496,6 +496,19 @@ export const SUBCOMMANDS: Readonly<
 // renderers and the error messages below share this one source of truth.
 export const usageForLabel = (label: string): string =>
   USAGE[label] ?? `dotrelay ${label}`;
+
+/**
+ * A usage entry as people read it. The table lists the plain form first and
+ * its optional alternatives after " | "; shown that way it reads as
+ * "dotrelay team members | --fingerprints", so the alternatives are
+ * bracketed instead: "dotrelay team members [--fingerprints]".
+ */
+export const displayUsage = (usage: string): string => {
+  const [primary, ...alternatives] = usage.split(" | ");
+  return alternatives.length === 0
+    ? usage
+    : `${primary} [${alternatives.join(" | ")}]`;
+};
 
 const usageFor = (
   command: CommandName | undefined,

@@ -519,9 +519,9 @@ export type RecoveryCeremonyHolder = {
 };
 
 const SETUP_NOTE =
-  "This code is not active until you confirm you saved it. Closing this dialog leaves the account unchanged.";
+  "You'll need this code to get back into your account if you lose this browser. It's only shown once.";
 const ROTATION_NOTE =
-  "The current recovery code keeps working until you confirm. This replacement is shown once and is not stored in this browser.";
+  "Your current recovery code keeps working until you confirm this new one. The new code is only shown once.";
 
 const presentCeremony = (
   holder: RecoveryCeremonyHolder,

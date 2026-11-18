@@ -102,7 +102,11 @@ import {
   unlockAccount,
   unlockMethods,
 } from "@/lib/account-recovery";
-import { confirmMember, resolveMemberTrust } from "@/lib/account-trust";
+import {
+  confirmMember,
+  publishOwnBrowserRoster,
+  resolveMemberTrust,
+} from "@/lib/account-trust";
 import { PRIVATE_ALPHA_PATH } from "@/lib/alpha-admission";
 import {
   restoreBrowserAccountKey,
@@ -203,8 +207,10 @@ import {
 } from "./getting-started-guide";
 import {
   CancelInvitationDialog,
+  ConfirmFingerprintDialog,
   DeclineInvitationDialog,
   DeviceRevokedDialog,
+  type FingerprintTarget,
   type InvitationTarget,
   MemberRemovedNotice,
   PROJECT_ROTATE_COMMAND,
@@ -308,6 +314,8 @@ const MemberAccountTrust = ({
       <div className="flex items-center gap-2">
         {unconfirmed ? (
           <Badge variant="secondary">Not confirmed</Badge>
+        ) : trust.status === "verified" && self ? (
+          <Badge variant="outline">Your fingerprint</Badge>
         ) : trust.status === "verified" ? (
           <Badge variant="outline">Verified account</Badge>
         ) : trust.status === "unverified" ? (
@@ -374,6 +382,13 @@ const memberLabel = (
   member.deleted
     ? "Deleted user"
     : (member.name ?? `GitHub ${member.githubSubject}`);
+
+const invitationLabel = (
+  invitation: Readonly<{ providerSubject: string; githubLogin?: string }>,
+): string =>
+  invitation.githubLogin
+    ? `@${invitation.githubLogin}`
+    : `GitHub ${invitation.providerSubject}`;
 
 // Invitation and expiry timestamps are absolute, so a human-readable date is
 // shown rather than a raw offset.
@@ -446,12 +461,10 @@ const replaceHistoryEntry = (search: string) => {
 const LifecycleDialog = ({
   resource,
   lifecycle,
-  disabled,
   onConfirm,
 }: {
   readonly resource: "Project" | "Environment";
   readonly lifecycle: ResourceLifecycle;
-  readonly disabled: boolean;
   readonly onConfirm: () => void;
 }) => {
   const isActive = lifecycle === "ACTIVE";
@@ -467,7 +480,6 @@ const LifecycleDialog = ({
                 ? "text-muted-foreground hover:text-destructive"
                 : undefined
             }
-            disabled={disabled}
             size="sm"
             variant={isActive ? "ghost" : "outline"}
           />
@@ -779,6 +791,12 @@ export const WorkspaceShell = ({
     null,
   );
   const [contextStale, setContextStale] = useState(false);
+  // The Environment whose session loader last finished, success or not.
+  // Until it has, a missing session means "still loading", not "this
+  // browser's keys are missing".
+  const [settledSessionEnvironment, setSettledSessionEnvironment] = useState<
+    string | null
+  >(null);
   const [missingResource, setMissingResource] =
     useState<WorkspaceMissingResource | null>(null);
   const draftStateRef = useRef<Map<string, DraftState>>(new Map());
@@ -952,6 +970,7 @@ export const WorkspaceShell = ({
   const profileTrusted = protectedPreview || profileTrust === "trusted";
 
   const teams = displayBoundary.catalog.teams;
+  const catalogTeamKey = teams.map((team) => team.id).join(",");
   const selectedTeam =
     teams.find((team) => team.id === teamId) ?? teams[0] ?? null;
   const teamProjects = displayBoundary.catalog.projects.filter(
@@ -1104,9 +1123,17 @@ export const WorkspaceShell = ({
     };
   }, [currentPinKey, pinStore, serverPin]);
 
+  // Each successful boundary refresh also rechecks invitations and the
+  // selected Team's members, at most every ten seconds, so an invitation sent
+  // or accepted while this page is open shows up without a reload. The
+  // bucket changes value only when a recheck is due.
+  const invitationRefreshBucket =
+    verifiedAt === null ? 0 : Math.floor(verifiedAt / 10_000);
+
   // Keep the selected Team's persisted membership record current: refetch on
-  // Team or session change, on reconnecting, and after a mutation (tick).
-  // membershipTick and displayBoundary.connection are refetch triggers (post-mutation and reconnect) whose values are intentionally not read inside the effect
+  // Team or session change, on reconnecting, after a mutation (tick), and with
+  // the periodic refresh above.
+  // membershipTick, displayBoundary.connection and invitationRefreshBucket are refetch triggers (post-mutation, reconnect, periodic) whose values are intentionally not read inside the effect
   useEffect(() => {
     const selectedTeamId = selectedTeam?.id;
     if (!apiOrigin || !selectedTeamId || !sessionActive) {
@@ -1134,6 +1161,7 @@ export const WorkspaceShell = ({
     sessionActive,
     membershipTick,
     displayBoundary.connection,
+    invitationRefreshBucket,
   ]);
 
   // ADR 0015: each Member's account identity, pinned on first sight in this
@@ -1194,22 +1222,31 @@ export const WorkspaceShell = ({
     memberTrustTick,
   ]);
 
+  const [fingerprintTarget, setFingerprintTarget] =
+    useState<FingerprintTarget | null>(null);
+  const requestMemberTrust = (
+    userId: string,
+    membershipId: string,
+    label: string,
+  ) => {
+    const trust = memberTrust.get(userId);
+    if (!trust?.fingerprint) return;
+    setFingerprintTarget({
+      userId,
+      membershipId,
+      label,
+      fingerprint: trust.fingerprint,
+      changed: trust.status === "identity-changed",
+    });
+  };
   const trustMemberKey = async (userId: string, membershipId: string) => {
+    setFingerprintTarget(null);
     const serverProfileId = displayBoundary.profile.serverProfileId;
     const trust = memberTrust.get(userId);
     const accountRoster = membershipState?.memberships.find(
       (member) => member.userId === userId,
     )?.accountRoster;
     if (!serverProfileId || !browserDeviceId || !trust || !accountRoster)
-      return;
-    const changed = trust.status === "identity-changed";
-    if (
-      !window.confirm(
-        changed
-          ? `Trust this member's new account fingerprint ${trust.fingerprint ?? ""}? Only do this after comparing it with them directly.`
-          : `Confirm this member's account fingerprint ${trust.fingerprint ?? ""}? Only do this after comparing it with them directly.`,
-      )
-    )
       return;
     setMemberMutationError(null);
     try {
@@ -1232,7 +1269,7 @@ export const WorkspaceShell = ({
 
   // Keep the invitations addressed to the signed-in User current, so an
   // invitee who has not yet joined a Team still sees the invitation they hold.
-  // membershipTick and displayBoundary.connection are refetch triggers whose values are intentionally not read inside the effect
+  // membershipTick, displayBoundary.connection, invitationRefreshBucket and catalogTeamKey are refetch triggers whose values are intentionally not read inside the effect
   useEffect(() => {
     if (!apiOrigin || !sessionActive) {
       setMyInvitations(null);
@@ -1247,7 +1284,17 @@ export const WorkspaceShell = ({
     return () => {
       cancelled = true;
     };
-  }, [apiOrigin, sessionActive, membershipTick, displayBoundary.connection]);
+  }, [
+    apiOrigin,
+    sessionActive,
+    membershipTick,
+    displayBoundary.connection,
+    invitationRefreshBucket,
+    // A pending Membership turns active when its keys arrive, and the Team
+    // then appears in the catalog: recheck right away so the "waiting"
+    // card goes with it.
+    catalogTeamKey,
+  ]);
 
   const refreshTeamAdministration = () => {
     setMembershipTick((tick) => tick + 1);
@@ -1465,6 +1512,28 @@ export const WorkspaceShell = ({
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- accountScope and wrapper id identify this local cache entry; background boundary refreshes must not re-encrypt it.
   }, [accountReady, accountScope, recoveryWrapperId]);
+
+  // Once the account is unlocked here, make sure this browser is on the
+  // account's signed device list. Without it an owner can't share Project
+  // keys with a new teammate who hasn't opened a Project yet. Once per
+  // account and Device in this page; a failure is retried on the next load.
+  const rosterPublishedRef = useRef(new Set<string>());
+  useEffect(() => {
+    const key = accountMasterKeyRef.current;
+    if (
+      boundary.source !== "live" ||
+      !accountReady ||
+      !key ||
+      !recoveryActor ||
+      rosterPublishedRef.current.has(accountScope)
+    )
+      return;
+    rosterPublishedRef.current.add(accountScope);
+    void publishOwnBrowserRoster(boundary, key, recoveryActor).catch(() => {
+      rosterPublishedRef.current.delete(accountScope);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- accountScope identifies the account and Device; periodic boundary refreshes must not republish.
+  }, [accountReady, accountScope, recoveryActor?.deviceId]);
 
   // The periodic boundary refresh also establishes the project's Account Key
   // Envelope after an in-session unlock or rotation, so it re-runs on
@@ -1954,7 +2023,8 @@ export const WorkspaceShell = ({
     displayBoundary.device.active &&
     !protectedPreview &&
     !protocolSession &&
-    !selectedSession;
+    !selectedSession &&
+    settledSessionEnvironment === (environmentId ?? null);
   const protectedWorkflowAvailable =
     setupAction === null && !localDeviceBlockers;
   const cliSetupCommand =
@@ -2669,7 +2739,10 @@ export const WorkspaceShell = ({
         durableBrowserDevice: durableBrowserDeviceRef.current,
         removeSessionByKey,
         setSessionsByKey,
-        setContextStale,
+        setContextStale: (stale: boolean) => {
+          setContextStale(stale);
+          if (!stale) setSettledSessionEnvironment(environmentId ?? null);
+        },
         setTrustProblem,
       },
       cancellation,
@@ -2691,6 +2764,8 @@ export const WorkspaceShell = ({
     removeSessionByKey,
     accountUnlocked,
     recoveryGeneration,
+    // Confirming a teammate can make a key they shared usable here.
+    memberTrustTick,
   ]);
 
   const provisioningContext = {
@@ -3461,12 +3536,18 @@ export const WorkspaceShell = ({
                   data-testid="my-invitations-card"
                 >
                   <CardHeader>
-                    <CardTitle>Invitations for you</CardTitle>
-                    <CardDescription>
-                      After you accept, a team owner or admin shares the
-                      team&apos;s keys with you. You&apos;ll see its values once
-                      they have.
-                    </CardDescription>
+                    <CardTitle>
+                      {myInvitations.invitations.length > 0
+                        ? "Invitations for you"
+                        : "Waiting to join"}
+                    </CardTitle>
+                    {myInvitations.invitations.length > 0 ? (
+                      <CardDescription>
+                        After you accept, a team owner or admin shares the
+                        team&apos;s keys with you. You&apos;ll see its values
+                        once they have.
+                      </CardDescription>
+                    ) : null}
                   </CardHeader>
                   <CardContent className="space-y-3">
                     {myInvitations.invitations.map((invitation) => (
@@ -3526,10 +3607,11 @@ export const WorkspaceShell = ({
                           <div className="font-medium">{pending.teamName}</div>
                           <div className="text-sm text-muted-foreground">
                             You&apos;ve joined. An owner or admin of{" "}
-                            {pending.teamName || "the team"} now needs to open
-                            Members and share the project keys with you. Then
-                            refresh this page, or run{" "}
-                            <InlineCommand value="dotrelay pull" />.
+                            {pending.teamName || "the team"} now needs to share
+                            the project keys with you from their Members page.
+                            This page updates by itself once they have. If you
+                            use the CLI, run{" "}
+                            <InlineCommand value="dotrelay pull" /> after that.
                           </div>
                         </div>
                         <Badge
@@ -3567,7 +3649,10 @@ export const WorkspaceShell = ({
                   {!sessionActive ? (
                     signInRequired
                   ) : teams.length === 0 ? (
-                    noTeamsEmpty
+                    (myInvitations?.pendingMemberships.length ?? 0) > 0 ||
+                    (myInvitations?.invitations.length ?? 0) > 0 ? null : (
+                      noTeamsEmpty
+                    )
                   ) : (
                     <>
                       {gettingStartedGuide}
@@ -3712,18 +3797,19 @@ export const WorkspaceShell = ({
                           {lifecycleError.message}
                         </p>
                       ) : null}
-                      <LifecycleDialog
-                        disabled={!canAdminister}
-                        lifecycle={environmentLifecycle}
-                        onConfirm={() =>
-                          void persistEnvironmentLifecycle(
-                            environmentLifecycle === "ACTIVE"
-                              ? "archive"
-                              : "restore",
-                          )
-                        }
-                        resource="Environment"
-                      />
+                      {canAdminister ? (
+                        <LifecycleDialog
+                          lifecycle={environmentLifecycle}
+                          onConfirm={() =>
+                            void persistEnvironmentLifecycle(
+                              environmentLifecycle === "ACTIVE"
+                                ? "archive"
+                                : "restore",
+                            )
+                          }
+                          resource="Environment"
+                        />
+                      ) : null}
                     </div>
                   </div>
                   {rotationOwed ? (
@@ -3829,6 +3915,13 @@ export const WorkspaceShell = ({
                         onDismiss={() => setRemovedNotice(null)}
                       />
                     ) : null}
+                    <ConfirmFingerprintDialog
+                      onCancel={() => setFingerprintTarget(null)}
+                      onConfirm={(target) =>
+                        void trustMemberKey(target.userId, target.membershipId)
+                      }
+                      target={fingerprintTarget}
+                    />
                     <RemoveMemberDialog
                       onCancel={() => setRemovalTarget(null)}
                       onConfirm={(target) => void removeMember(target)}
@@ -3852,18 +3945,20 @@ export const WorkspaceShell = ({
                       <CardHeader>
                         <CardTitle>Members and invites</CardTitle>
                         <CardDescription>
-                          Invite people by their GitHub username. Invites expire
-                          after seven days.
+                          {canAdminister
+                            ? "Invite people by their GitHub username. Invites expire after seven days."
+                            : "Only owners and admins can invite people. Ask one of them to add someone."}
                         </CardDescription>
-                        <CardAction>
-                          <Button
-                            data-testid="invite-member"
-                            disabled={!canAdminister}
-                            onClick={openInvitationDialog}
-                          >
-                            <Users aria-hidden="true" /> Invite member
-                          </Button>
-                        </CardAction>
+                        {canAdminister ? (
+                          <CardAction>
+                            <Button
+                              data-testid="invite-member"
+                              onClick={openInvitationDialog}
+                            >
+                              <Users aria-hidden="true" /> Invite member
+                            </Button>
+                          </CardAction>
+                        ) : null}
                       </CardHeader>
                       <CardContent>
                         {!apiOrigin ? (
@@ -3926,15 +4021,36 @@ export const WorkspaceShell = ({
                                     key={member.membershipId}
                                     data-testid={`member-row-${member.membershipId}`}
                                   >
-                                    <TableCell>
-                                      <div className="font-medium">{label}</div>
+                                    <TableCell className="min-w-56 whitespace-normal">
+                                      <div className="font-medium">
+                                        {label}
+                                        {isSelf ? (
+                                          <span className="font-normal text-muted-foreground">
+                                            {" "}
+                                            (you)
+                                          </span>
+                                        ) : null}
+                                      </div>
+                                      {member.githubLogin && !member.deleted ? (
+                                        <div className="text-xs text-muted-foreground">
+                                          @{member.githubLogin}
+                                        </div>
+                                      ) : null}
                                       <MemberAccountTrust
-                                        trust={memberTrust.get(member.userId)}
+                                        trust={
+                                          // A removed member gets nothing
+                                          // from this Team any more, so
+                                          // there is nothing to confirm.
+                                          member.lifecycle === "REMOVED"
+                                            ? undefined
+                                            : memberTrust.get(member.userId)
+                                        }
                                         self={isSelf}
                                         onTrust={() =>
-                                          void trustMemberKey(
+                                          requestMemberTrust(
                                             member.userId,
                                             member.membershipId,
+                                            label,
                                           )
                                         }
                                       />
@@ -4087,10 +4203,10 @@ export const WorkspaceShell = ({
                                 >
                                   <TableCell>
                                     <div className="font-medium">
-                                      Invitation
+                                      {invitationLabel(invitation)}
                                     </div>
-                                    <div className="font-mono text-[10px] text-muted-foreground">
-                                      GitHub {invitation.providerSubject}
+                                    <div className="text-xs text-muted-foreground">
+                                      Hasn&apos;t accepted yet
                                     </div>
                                   </TableCell>
                                   {canAdminister ? (
@@ -4108,7 +4224,7 @@ export const WorkspaceShell = ({
                                   {canAdminister ? (
                                     <TableCell>
                                       <Button
-                                        aria-label={`Cancel invitation for GitHub ${invitation.providerSubject}`}
+                                        aria-label={`Cancel invitation for ${invitationLabel(invitation)}`}
                                         disabled={
                                           cancellingInvitationId !== null
                                         }
@@ -4116,7 +4232,7 @@ export const WorkspaceShell = ({
                                           setCancelInvitationTarget({
                                             invitationId:
                                               invitation.invitationId,
-                                            label: `GitHub ${invitation.providerSubject}`,
+                                            label: invitationLabel(invitation),
                                           })
                                         }
                                         size="sm"
@@ -4156,7 +4272,7 @@ export const WorkspaceShell = ({
                         )}
                       </CardContent>
                     </Card>
-                    {selectedProject ? (
+                    {selectedProject && canAdminister ? (
                       <>
                         <h2 className="mt-10 font-heading text-lg font-semibold">
                           Project
@@ -4189,7 +4305,6 @@ export const WorkspaceShell = ({
                               </Badge>
                             </span>
                             <LifecycleDialog
-                              disabled={!canAdminister}
                               lifecycle={projectLifecycle}
                               onConfirm={() =>
                                 void persistProjectLifecycle(
@@ -4504,6 +4619,7 @@ export const WorkspaceShell = ({
                           });
                         }}
                         onSetupAction={handleSetupAction}
+                        onOpenMembers={() => setView("team")}
                         protocolSession={entry.session ?? protocolSession}
                         setupAction={entry.setupAction}
                         setupBusy={isCurrent ? deviceSetupInProgress : false}
@@ -4530,8 +4646,8 @@ export const WorkspaceShell = ({
           <DialogHeader>
             <DialogTitle>Invite a member</DialogTitle>
             <DialogDescription>
-              Invitations go to a GitHub account, not an email address. Each
-              invitation works once and expires after seven days.
+              Invite someone by their GitHub username. They&apos;ll see the
+              invitation when they open DotRelay. It expires after seven days.
             </DialogDescription>
           </DialogHeader>
           {inviteError ? (
@@ -4539,7 +4655,7 @@ export const WorkspaceShell = ({
               <AlertTitle>
                 {inviteStep === "confirmed"
                   ? "Couldn't create the invitation"
-                  : "Couldn't resolve that login"}
+                  : "Couldn't find that GitHub user"}
               </AlertTitle>
               <AlertDescription>{inviteError}</AlertDescription>
             </Alert>
@@ -4547,23 +4663,31 @@ export const WorkspaceShell = ({
           {inviteStep === "form" ? (
             <>
               <div className="space-y-2">
-                <Label htmlFor="github-login">GitHub login</Label>
+                <Label htmlFor="github-login">GitHub username</Label>
                 <Input
                   autoComplete="off"
                   disabled={inviteBusy}
                   id="github-login"
                   onChange={(event) => setInviteLogin(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (
+                      event.key === "Enter" &&
+                      inviteLogin.trim() &&
+                      !inviteBusy
+                    ) {
+                      event.preventDefault();
+                      void resolveInvitation();
+                    }
+                  }}
                   placeholder="octocat"
+                  spellCheck={false}
                   value={inviteLogin}
                 />
+                <p className="text-sm text-muted-foreground">
+                  After they accept, you share the project keys with them from
+                  this page so they can read values.
+                </p>
               </div>
-              <Alert className="bg-muted/30">
-                <AlertTitle>Pending after acceptance</AlertTitle>
-                <AlertDescription>
-                  New members stay pending until they've received the encryption
-                  keys their device needs.
-                </AlertDescription>
-              </Alert>
               <DialogFooter>
                 <DialogClose render={<Button variant="outline" />}>
                   Cancel
@@ -4573,7 +4697,7 @@ export const WorkspaceShell = ({
                   disabled={!inviteLogin.trim() || inviteBusy}
                   onClick={() => void resolveInvitation()}
                 >
-                  {inviteBusy ? "Resolving…" : "Resolve"}
+                  {inviteBusy ? "Looking up…" : "Continue"}
                 </Button>
               </DialogFooter>
             </>
@@ -4585,7 +4709,7 @@ export const WorkspaceShell = ({
                   GitHub ID {inviteResolved?.githubUserId}
                 </div>
                 <div className="mt-1 text-sm text-muted-foreground">
-                  This invitation expires in seven days.
+                  Check this is the right person before you invite them.
                 </div>
               </div>
               <DialogFooter>
@@ -4605,7 +4729,9 @@ export const WorkspaceShell = ({
                   disabled={inviteBusy}
                   onClick={() => void createInvitation()}
                 >
-                  {inviteBusy ? "Creating…" : "Create invitation"}
+                  {inviteBusy
+                    ? "Inviting…"
+                    : `Invite @${inviteResolved?.login ?? ""}`}
                 </Button>
               </DialogFooter>
             </>

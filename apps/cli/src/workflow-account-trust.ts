@@ -326,7 +326,7 @@ export const establishAccountTrust = async (
   );
   if (firstSight.length > 0)
     notices.push(
-      `Pinned ${firstSight.length} member account key${firstSight.length === 1 ? "" : "s"} this device hadn't seen before. Their revisions verify, but this device won't take a project key from them until you compare fingerprints. Run dotrelay team members --fingerprints, then dotrelay team trust <user-id>.`,
+      `First time this device has seen ${firstSight.length === 1 ? "a teammate's account key" : `${firstSight.length} teammates' account keys`}. Their changes verify. Before this device accepts project keys they share with it directly, compare fingerprints: dotrelay team members --fingerprints, then dotrelay team trust <user-id>.`,
     );
   return Object.freeze({
     boundary: applyAccountTrust(boundary, resolution, userId, {

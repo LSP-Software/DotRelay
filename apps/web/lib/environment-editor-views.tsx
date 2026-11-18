@@ -552,6 +552,7 @@ export const VariableRow = ({
   canEdit,
   canDelete,
   readOnlyDisclosure,
+  othersPrivate,
   canUndoDelete,
   onDelete,
   onSetAbsent,
@@ -565,6 +566,11 @@ export const VariableRow = ({
   readonly canEdit: boolean;
   readonly canDelete: boolean;
   readonly readOnlyDisclosure: string | null;
+  /**
+   * Another member's "Only me" Value, which never reaches this browser:
+   * there is nothing to reveal, and "Not set" would suggest it is empty.
+   */
+  readonly othersPrivate: boolean;
   readonly canUndoDelete: boolean;
   readonly onDelete: () => void;
   readonly onSetAbsent: () => void;
@@ -572,7 +578,7 @@ export const VariableRow = ({
   readonly onUndoDelete: () => void;
   readonly onValueChange: (value: string) => void;
 }) => {
-  const state = valueStateLabel(variable);
+  const state = othersPrivate ? "Private" : valueStateLabel(variable);
   const showState = state !== "Hidden";
 
   return (
@@ -662,20 +668,22 @@ export const VariableRow = ({
               {state}
             </span>
           ) : null}
-          <Button
-            aria-label={`${revealed ? "Hide" : "Reveal"} ${variable.name}`}
-            disabled={editingDisabled}
-            onClick={onToggleReveal}
-            size="icon-sm"
-            title={revealed ? "Hide value" : "Show value"}
-            variant="ghost"
-          >
-            {revealed ? (
-              <EyeOff aria-hidden="true" />
-            ) : (
-              <Eye aria-hidden="true" />
-            )}
-          </Button>
+          {othersPrivate ? null : (
+            <Button
+              aria-label={`${revealed ? "Hide" : "Reveal"} ${variable.name}`}
+              disabled={editingDisabled}
+              onClick={onToggleReveal}
+              size="icon-sm"
+              title={revealed ? "Hide value" : "Show value"}
+              variant="ghost"
+            >
+              {revealed ? (
+                <EyeOff aria-hidden="true" />
+              ) : (
+                <Eye aria-hidden="true" />
+              )}
+            </Button>
+          )}
           {variable.value !== null ? (
             <CopyValueButton
               disabled={editingDisabled}
@@ -819,8 +827,8 @@ export const AddVariableDialog = ({
               <span>
                 <span className="block text-sm font-medium">Only me</span>
                 <span className="block text-xs text-muted-foreground">
-                  Each person sets their own value. Only your devices can read
-                  yours.
+                  Private to you. Only your devices can read it; teammates
+                  don&apos;t get it.
                 </span>
               </span>
             </label>

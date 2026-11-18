@@ -1145,11 +1145,14 @@ export const syncWorkflow = async (
         : `this device can't decrypt the environment with the project key it has. Nothing was written.\n${SHARE_PROJECT_KEYS_STEP}\nThen run dotrelay pull again.`;
     throw new CliError("incomplete-export", detail, {}, "unreadable_manifest");
   }
-  const count = synced.variables.filter(
-    (variable) => !variable.tombstone,
-  ).length;
+  const live = synced.variables.filter((variable) => !variable.tombstone);
+  // Count what this device actually opened: a teammate's "Only me" Value is
+  // never sent here, so it isn't "decrypted".
+  const count = live.filter((variable) => variable.value !== null).length;
   progress.done(
-    `Verified the history and decrypted ${count} ${count === 1 ? "value" : "values"} on this device`,
+    live.length === 0
+      ? "Checked the environment: nothing has been published yet"
+      : `Verified the history and decrypted ${count} ${count === 1 ? "value" : "values"} on this device`,
   );
   const page = synced.page;
   const localHead = await readTrustedHead(

@@ -217,7 +217,7 @@ test("device approval page asks to allow the CLI", async ({ page }) => {
   // The CLI may run on another host (dotrelay setup --no-open), so the
   // copy never claims it is on this machine.
   await expect(
-    page.getByText("A DotRelay CLI is asking to sign in"),
+    page.getByText("A DotRelay CLI wants to sign in as you"),
   ).toBeVisible();
   await expect(page.getByText("ABCD-EFGH")).toBeVisible();
 });
@@ -385,10 +385,10 @@ test("role-aware administration reflects the persisted Team record", async ({
   // Inviting resolves a familiar login and only reports the invitation once
   // the service confirms it.
   await page.getByRole("button", { name: "Invite member" }).click();
-  await page.getByLabel("GitHub login").fill("octocat");
-  await page.getByRole("button", { name: "Resolve" }).click();
+  await page.getByLabel("GitHub username").fill("octocat");
+  await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByText("GitHub ID 583231")).toBeVisible();
-  await page.getByRole("button", { name: "Create invitation" }).click();
+  await page.getByRole("button", { name: /^Invite @/ }).click();
   await expect(page.getByTestId("invitation-dialog")).toBeHidden();
   expect(invitationCreates).toBe(1);
   await expect(membersCard.getByText(/^Invited, expires/)).toBeVisible();
@@ -398,9 +398,9 @@ test("role-aware administration reflects the persisted Team record", async ({
   await page
     .getByRole("combobox", { name: "Preview role" })
     .selectOption("MEMBER");
-  await expect(
-    page.getByRole("button", { name: "Invite member" }),
-  ).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Invite member" })).toHaveCount(
+    0,
+  );
   await expect(membersCard.getByText("Owner", { exact: true })).toHaveCount(0);
   await expect(
     page.getByText(
@@ -645,7 +645,11 @@ test("protected Environment editor offers lane rollback", async ({ page }) => {
   await page.goto("/workspace?preview=protected");
 
   await page.getByRole("tab", { name: "History" }).click();
-  await page.getByRole("button", { name: "Roll back" }).first().click();
+  await page
+    .getByTestId(/history-revision-/)
+    .filter({ hasText: "rev_0183" })
+    .getByRole("button", { name: "Roll back" })
+    .click();
   const rollbackDialog = page.getByRole("dialog", { name: "Roll back" });
   await expect(rollbackDialog).toContainText(
     "Publishing adds a new revision and keeps the history",
@@ -681,7 +685,11 @@ test("protected Environment editor offers lane rollback", async ({ page }) => {
   ).toHaveAttribute("aria-pressed", "true");
 
   await page.getByRole("button", { name: "Cancel" }).click();
-  await page.getByRole("button", { name: "Roll back" }).first().click();
+  await page
+    .getByTestId(/history-revision-/)
+    .filter({ hasText: "rev_0183" })
+    .getByRole("button", { name: "Roll back" })
+    .click();
   await expect(rollbackDialog).not.toContainText("https://api.acme.example");
   await expect(rollbackDialog).toContainText("••••••••");
   await expect(showRollbackValues).toHaveAttribute("aria-pressed", "false");

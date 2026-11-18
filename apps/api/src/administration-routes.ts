@@ -340,7 +340,8 @@ export const registerAdministrationRoutes = (
         context.req.header("Idempotency-Key"),
       );
       const commandBytes = new TextEncoder().encode(
-        JSON.stringify({ action: "team.create", name }),
+        // Two Teams may share a name, so the Idempotency-Key tells them apart.
+        JSON.stringify({ action: "team.create", name, operationId }),
       );
       const result = await administration.createTeamWithOwner(database, {
         serverProfileId: profile.id,

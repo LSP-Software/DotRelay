@@ -13,7 +13,10 @@ import { BrandLink, GitHubMark } from "@/components/site-shell";
 import { buttonVariants } from "@/components/ui/button";
 import { isSessionActive } from "@/lib/server-session";
 import { cn } from "@/lib/utils";
-import { resolveLiveApiOrigin } from "@/lib/workspace-boundary";
+import {
+  resolveLiveApiOrigin,
+  resolveWorkspaceProfileId,
+} from "@/lib/workspace-boundary";
 
 const REPOSITORY_URL = "https://github.com/LSP-Software/DotRelay";
 const DOCS_URL = `${REPOSITORY_URL}/blob/main/docs/wiki/cli.md`;
@@ -79,7 +82,7 @@ const FEATURES = [
   {
     icon: UserRound,
     title: "Keep some values to yourself",
-    body: "Mark a variable as yours only, like a local database password. Everyone sets their own value.",
+    body: "Mark a value as yours only, like a personal API token. Only your devices can read it; teammates don't get it.",
   },
   {
     icon: SquareTerminal,
@@ -217,10 +220,10 @@ const HomePage = async () => {
                   How it works
                 </a>
               </div>
-              {signedIn ? null : (
+              {signedIn || resolveWorkspaceProfileId() !== "hosted" ? null : (
                 <p className="mt-3.5 text-sm text-muted-foreground">
                   DotRelay is in private alpha. You can sign in once your GitHub
-                  account has been let in.
+                  account is on the list.
                 </p>
               )}
               <InstallTabs className="mt-8" />
@@ -257,7 +260,7 @@ const HomePage = async () => {
                 history{"\n"}
                 <span className="text-muted-foreground">
                   {
-                    "  42  samk     2 minutes ago\n  41  priya-n  3 days ago\n  40  jo-dev   last week"
+                    "  #40  jo-dev   last week\n  #41  priya-n  3 days ago\n  #42  samk     2 minutes ago"
                   }
                 </span>
               </pre>

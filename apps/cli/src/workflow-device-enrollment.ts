@@ -253,22 +253,25 @@ export const enrollFirstDevice = async (
     // This installation already holds a Device. Claim it only after the
     // Server Profile confirms it is this session's active Device and the
     // matching bundle loads from local storage.
-    const admin = createDeviceAdmin(options, localDeviceId);
-    const session = await admin.get("/api/v1/session", [
-      "authenticated",
-      "user",
-    ]);
-    if (!isRecord(session.user))
-      throw new CliError(
-        "authentication",
-        "The server didn't say which user you're signed in as. Run dotrelay login to sign in again.",
-        {},
-        "session_invalid",
-      );
-    const boundary = parseBoundary(
-      await admin.get("/api/v1/workspace/boundary", workspaceBoundaryFields),
-    );
     try {
+      // Every request here proves the recorded Device, so a revoked one
+      // fails on the first of them; that must fall through to enrolling a
+      // replacement too, not stop with "enroll again".
+      const admin = createDeviceAdmin(options, localDeviceId);
+      const session = await admin.get("/api/v1/session", [
+        "authenticated",
+        "user",
+      ]);
+      if (!isRecord(session.user))
+        throw new CliError(
+          "authentication",
+          "The server didn't say which user you're signed in as. Run dotrelay login to sign in again.",
+          {},
+          "session_invalid",
+        );
+      const boundary = parseBoundary(
+        await admin.get("/api/v1/workspace/boundary", workspaceBoundaryFields),
+      );
       await verifyDeviceBundle(
         options,
         boundary,

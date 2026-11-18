@@ -368,6 +368,10 @@ const createDatabaseStub = () => {
   const auditEvents: Array<Record<string, unknown>> = [];
   const createdMemberships: StubMembership[] = [];
   const createdInvitations: StubInvitation[] = [];
+  const githubLogins = [
+    { githubSubject: "1001", login: "owner-login" },
+    { githubSubject: "2002", login: "Member-Login" },
+  ];
   const rotationObligations: Array<Record<string, unknown>> = [];
   const membershipPeriods: Array<Record<string, unknown>> = [];
 
@@ -398,12 +402,21 @@ const createDatabaseStub = () => {
       }: {
         where: { githubSubject: { in: string[] } };
       }) =>
-        [
-          { githubSubject: "1001", login: "owner-login" },
-          { githubSubject: "2002", login: "Member-Login" },
-        ].filter((entry) =>
+        githubLogins.filter((entry) =>
           where.githubSubject.in.includes(entry.githubSubject),
         ),
+      upsert: async ({
+        create,
+      }: {
+        create: { githubSubject: string; login: string };
+      }) => {
+        const existing = githubLogins.findIndex(
+          (entry) => entry.githubSubject === create.githubSubject,
+        );
+        if (existing >= 0) githubLogins.splice(existing, 1);
+        githubLogins.push(create);
+        return create;
+      },
     },
     user: {
       upsert: async ({
@@ -736,6 +749,17 @@ const createDatabaseStub = () => {
       }) => {
         for (const entry of data) {
           if (operations.has(entry.id)) continue;
+          // Like the database's (actorUserId, commandDigest) unique index:
+          // an identical command from the same actor is skipped.
+          const digest = Buffer.from(entry.commandDigest).toString("hex");
+          if (
+            [...operations.values()].some(
+              (existing) =>
+                existing.actorUserId === entry.actorUserId &&
+                Buffer.from(existing.commandDigest).toString("hex") === digest,
+            )
+          )
+            continue;
           operations.set(entry.id, {
             id: entry.id,
             actorUserId: entry.actorUserId,
@@ -985,6 +1009,7 @@ describe("Team membership and invitation routes", () => {
       {
         invitationId: INV_ACTIVE,
         providerSubject: "583231",
+        githubLogin: null,
         createdAt: t(-1).toISOString(),
         expiresAt: t(6).toISOString(),
       },
@@ -1129,6 +1154,7 @@ describe("Team membership and invitation routes", () => {
         {
           invitationId: INV_ACTIVE,
           providerSubject: "583231",
+          githubLogin: null,
           createdAt: t(-1).toISOString(),
           expiresAt: t(6).toISOString(),
         },
@@ -1309,6 +1335,20 @@ describe("Team membership and invitation routes", () => {
       login: "octocat",
       githubUserId: "583231",
     });
+    // The login is remembered, so the pending invitation for 583231 is shown
+    // as @octocat instead of a bare number.
+    const table = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/invitations`,
+      { token: "owner-token", deviceId: DEVICE_OWNER },
+    );
+    const { invitations } = (await table.json()) as {
+      invitations: { providerSubject: string; githubLogin: string | null }[];
+    };
+    expect(
+      invitations.find((entry) => entry.providerSubject === "583231")
+        ?.githubLogin,
+    ).toBe("octocat");
   });
 
   test("an unresolvable GitHub login answers as not found, never as an outage", async () => {
@@ -1464,6 +1504,25 @@ describe("Team membership and invitation routes", () => {
   });
 });
 describe("Team membership role and removal routes", () => {
+  test("changing a role back and forth is a series of new commands", async () => {
+    const { testApp } = createTestApp();
+    const roles = ["ADMIN", "MEMBER", "ADMIN"] as const;
+    for (const [index, role] of roles.entries()) {
+      const response = await request(
+        testApp,
+        `/api/v1/teams/${TEAM_A}/memberships/${MEMBER_M2}/role`,
+        {
+          method: "POST",
+          token: "owner-token",
+          deviceId: DEVICE_OWNER,
+          idempotencyKey: `b1000000-0000-4000-8000-00000000000${index}`,
+          body: { role },
+        },
+      );
+      expect(response.status, role).toBe(201);
+    }
+  });
+
   test("an owner changes a member's role and the record persists", async () => {
     const { testApp, auditEvents } = createTestApp();
     const response = await request(

@@ -645,6 +645,7 @@ export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
                     required: Object.freeze([
                       "invitationId",
                       "providerSubject",
+                      "githubLogin",
                       "createdAt",
                       "expiresAt",
                     ]),
@@ -654,6 +655,9 @@ export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
                         format: "uuid",
                       }),
                       providerSubject: Object.freeze({ type: "string" }),
+                      // Display only: the invitee's GitHub login when the
+                      // service has seen it, else null.
+                      githubLogin: nullable({ type: "string" }),
                       createdAt: Object.freeze({
                         type: "string",
                         format: "date-time",

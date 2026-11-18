@@ -81,7 +81,7 @@ export const readOnlyReason = (
   if (canActorChangeVariableValue(actor, variable)) return null;
   if (variable.ownership === "SHARED_VALUE")
     return "Only the person who provided it, or a team admin, can change it.";
-  return "This value belongs to another user's account.";
+  return "Another member's private value. Only they can read or change it.";
 };
 
 export const reconcileDraftWithPermissions = (

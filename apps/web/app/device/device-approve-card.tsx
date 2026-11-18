@@ -132,12 +132,12 @@ export const DeviceApproveCard = ({
               <AlertTitle>Only allow a code you requested</AlertTitle>
               <AlertDescription>
                 <p>
-                  Allowing gives the terminal that requested this code full
-                  access to your DotRelay account. Deny it if someone sent you
-                  this link or code, asked you to approve it, or if you did not
-                  run <CommandText text="`dotrelay login`" /> or{" "}
+                  Allowing gives that terminal full access to your DotRelay
+                  account. Deny it if someone sent you this link or asked you to
+                  approve it, or if you didn&apos;t run{" "}
+                  <CommandText text="`dotrelay login`" /> or{" "}
                   <CommandText text="`dotrelay setup`" /> yourself in the last
-                  10 minutes. Codes expire 10 minutes after they are requested.
+                  10 minutes.
                 </p>
               </AlertDescription>
             </Alert>
@@ -176,9 +176,6 @@ export const DeviceApproveCard = ({
                 Allow this CLI
               </Button>
             </div>
-            <p className="text-xs text-muted-foreground">
-              If you didn&apos;t start this, choose Deny.
-            </p>
           </div>
         );
       case "approved":
@@ -188,7 +185,7 @@ export const DeviceApproveCard = ({
             data-testid="device-approval-approved"
             role="status"
           >
-            Allowed. You can return to the CLI.
+            Done. You can close this tab and go back to your terminal.
           </p>
         );
       case "declined":
@@ -298,14 +295,8 @@ export const DeviceApproveCard = ({
         {decided ? null : (
           <>
             <p className="mt-2 text-muted-foreground">
-              A DotRelay CLI is asking to sign in as you. Only allow it if you
-              started this sign-in from your own terminal just now and it shows
-              the code below.
-            </p>
-            <p className="mt-3 text-sm text-muted-foreground">
-              Allowing gives that terminal access to your DotRelay account,
-              including your teams, invitations and roles. It still can&apos;t
-              decrypt your values until you set it up as one of your devices.
+              A DotRelay CLI wants to sign in as you. Check that your terminal
+              shows this code.
             </p>
           </>
         )}

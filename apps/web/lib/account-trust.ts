@@ -9,6 +9,7 @@ import {
   deriveAccountSigningKey,
   emptyAccountTrustPins,
   isBlockingStatus,
+  loadDeviceKeyMaterial,
   type OwnDeviceReport,
   parseAccountTrustPins,
   planOwnRoster,
@@ -325,6 +326,40 @@ export const establishBrowserAccountTrust = async (
     boundary: applyBrowserAccountTrust(boundary, resolution, userId),
     resolution,
   };
+};
+
+/**
+ * Publishes this browser's signed Account Device roster if it is missing or
+ * out of date. Teammates can share Project keys only with Devices a signed
+ * roster lists, and the roster is otherwise published only when an
+ * Environment opens, so a new invitee with no Project yet would never get
+ * one. Call it once the account is unlocked in this browser.
+ */
+export const publishOwnBrowserRoster = async (
+  boundary: WorkspaceBoundary,
+  accountMasterKey: Uint8Array,
+  actor: AccountKeyActor,
+): Promise<void> => {
+  const deviceId = boundary.device.id;
+  const serverProfileId = boundary.profile.serverProfileId;
+  if (!deviceId || !serverProfileId) return;
+  const pin = { serverProfileId, origin: boundary.profile.origin };
+  const material = await loadDeviceKeyMaterial(
+    await createBrowserDeviceStorage(pin).load({
+      pin,
+      deviceId: uuidToBytes(deviceId),
+    }),
+  );
+  if (!material.encryptionPublicKey || !material.signingPublicKey) return;
+  const raw = async (key: CryptoKey) =>
+    new Uint8Array(await globalThis.crypto.subtle.exportKey("raw", key));
+  await establishBrowserAccountTrust({
+    boundary,
+    accountMasterKey,
+    actor,
+    encryptionPublicKey: await raw(material.encryptionPublicKey),
+    signingPublicKey: await raw(material.signingPublicKey),
+  });
 };
 
 // The Members view: each Member's trust state and fingerprint, pinning

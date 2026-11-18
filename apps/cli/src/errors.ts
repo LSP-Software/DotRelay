@@ -337,7 +337,7 @@ export const detailForProblem = (
   if (code === "authentication_required")
     return "You're not signed in to this server. Run dotrelay login.";
   if (code === "device_not_active")
-    return "This device isn't active anymore, so it has to be enrolled again. Run dotrelay device enroll.";
+    return "This device isn't active anymore, so it has to be set up again. Run dotrelay device recover with your recovery code, or a transfer code sent from a device you still use.";
   if (code === "device_proof_required")
     return "The server didn't accept this device's proof of its key. Run the command again. If it keeps failing, sign in again with dotrelay login.";
   if (code === "recent_sign_in_required")

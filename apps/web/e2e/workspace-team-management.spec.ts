@@ -479,5 +479,5 @@ test("a plain member sees no role or removal controls", async ({ page }) => {
   await expect(
     membersCard.getByRole("button", { name: "Remove member" }),
   ).toHaveCount(0);
-  await expect(page.getByTestId("invite-member")).toBeDisabled();
+  await expect(page.getByTestId("invite-member")).toHaveCount(0);
 });
