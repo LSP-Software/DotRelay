@@ -23,6 +23,8 @@ export type TeamMember = Readonly<{
   readonly name: string | null;
   readonly image: string | null;
   readonly githubSubject: string;
+  /** The GitHub login last seen for this Member, for display only. */
+  readonly githubLogin?: string;
   readonly lifecycle: MembershipLifecycle;
   /** The User deleted their account (ADR 0018); the row is history only. */
   readonly deleted?: boolean;
@@ -39,6 +41,7 @@ export type TeamMember = Readonly<{
 export type TeamInvitation = Readonly<{
   readonly invitationId: string;
   readonly providerSubject: string;
+  readonly githubLogin?: string;
   readonly createdAt: string;
   readonly expiresAt: string;
 }>;
@@ -214,6 +217,9 @@ export const parseTeamMembershipState = (
         name: asString(entry.name) ?? null,
         image: asString(entry.image) ?? null,
         githubSubject,
+        ...(asString(entry.githubLogin)
+          ? { githubLogin: asString(entry.githubLogin) as string }
+          : {}),
         lifecycle,
         ...(entry.deleted === true ? { deleted: true } : {}),
         ...(typeof entry.accountRoster === "string" ||
@@ -280,9 +286,11 @@ const parseInvitationEntry = (entry: unknown): TeamInvitation | null => {
   const providerSubject = asString(entry.providerSubject);
   const expiresAt = asString(entry.expiresAt);
   if (!invitationId || !providerSubject || !expiresAt) return null;
+  const githubLogin = asString(entry.githubLogin);
   return {
     invitationId,
     providerSubject,
+    ...(githubLogin ? { githubLogin } : {}),
     createdAt: asString(entry.createdAt) ?? "",
     expiresAt,
   };

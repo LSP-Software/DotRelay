@@ -151,10 +151,13 @@ type EnvironmentEditorProps = Readonly<{
   readonly setupMessage?: string | null | undefined;
   readonly setupBusy?: boolean | undefined;
   readonly onSetupAction?: (() => void) | undefined;
+  /** Opens the Team's Members view, where a teammate can be confirmed. */
+  readonly onOpenMembers?: (() => void) | undefined;
   readonly protocolSession?:
     | Readonly<{
         readonly context: PublicationContext;
         readonly transport: ProtocolTransport;
+        readonly projectKeyBlocked?: "unconfirmed-sharer";
         readonly signingTrustKeys?: RevisionSigningTrust;
         readonly decodeVariables?: (
           page: SyncPageWire,
@@ -220,6 +223,7 @@ export const EnvironmentEditor = ({
   setupMessage,
   setupBusy,
   onSetupAction,
+  onOpenMembers,
   protocolSession,
 }: EnvironmentEditorProps) => {
   const session =
@@ -228,6 +232,9 @@ export const EnvironmentEditor = ({
       ? protocolSession
       : null;
   const actorUserId = session?.context.actorUserId ?? null;
+  // A teammate's shared key is waiting for the user to confirm that teammate.
+  const waitingOnSharerConfirmation =
+    session?.projectKeyBlocked === "unconfirmed-sharer";
   const actor: EditorActor = { role, actorUserId };
   const canChangeDefinitions = canActorChangeDefinitions(actor);
   const [variables, setVariables] = useState<EnvironmentVariable[]>(() =>
@@ -269,6 +276,9 @@ export const EnvironmentEditor = ({
   >(() => new Map());
   const [conflictValuesRevealed, setConflictValuesRevealed] = useState(false);
   const [publishMessage, setPublishMessage] = useState<string | null>(null);
+  // The last message a failed load showed, so a later successful load can
+  // take it down without clearing an unrelated publish message.
+  const loadErrorMessageRef = useRef<string | null>(null);
   const [publishing, setPublishing] = useState(false);
   const [staleHeadRevision, setStaleHeadRevision] = useState<string | null>(
     null,
@@ -389,22 +399,33 @@ export const EnvironmentEditor = ({
           });
           setHeadRevision(page.currentHeadId);
         }
-        if (!cancelled) setLoadPhase("ready");
+        if (!cancelled) {
+          const staleError = loadErrorMessageRef.current;
+          loadErrorMessageRef.current = null;
+          if (staleError)
+            setPublishMessage((current) =>
+              current === staleError ? null : current,
+            );
+          setLoadPhase("ready");
+        }
       } catch (error) {
         if (!cancelled) {
-          setPublishMessage(
+          const message =
             error instanceof UnreadableLaneError
               ? error.reason === "unconfirmed-legacy-author"
                 ? "A value in this environment was last published in an older format by a teammate this browser hasn't confirmed. Compare their fingerprint in Members and confirm it, or ask a teammate to publish the value again. Your values have not been changed."
                 : error.laneKind === "USER_DEFINED_VALUE"
                   ? "This browser can open the account, but not a user-defined value in this environment. Open DotRelay on the device that last published it and run `dotrelay pull`, then retry here. Your values have not been changed."
-                  : "This browser can open the account, but not this project's values. On a device that can still read this project, run `dotrelay pull` to publish its key for recovery, then retry here. Your values have not been changed."
+                  : session.projectKeyBlocked === "unconfirmed-sharer"
+                    ? "A teammate shared this project's keys with you. This browser uses them once you confirm that teammate's fingerprint in Members."
+                    : "This browser can open the account, but not this project's values. On a device that can still read this project, run `dotrelay pull` to publish its key for recovery, then retry here. Your values have not been changed."
               : stage === "fetch"
                 ? "The server couldn't send this environment. Check your connection and retry; no values were changed."
                 : stage === "verify"
                   ? "The environment response failed integrity verification. No values were shown or changed. Retry, and contact the server administrator if it persists."
-                  : "This browser couldn't decrypt the verified environment. Open Recovery to check this account's key, then retry. No values were changed.",
-          );
+                  : "This browser couldn't decrypt the verified environment. Open Recovery to check this account's key, then retry. No values were changed.";
+          loadErrorMessageRef.current = message;
+          setPublishMessage(message);
           setLoadPhase("failed");
         }
       }
@@ -875,9 +896,14 @@ export const EnvironmentEditor = ({
         setRollbackMutationTarget(null);
         clearConflictState();
         setReviewOpen(false);
-        setPublishMessage(
-          `Published ${displayRevisionId(artifacts.request.revision.id)}.`,
-        );
+        {
+          const published = publishVariables.filter(
+            (variable) => variable.hasDraftChange,
+          ).length;
+          setPublishMessage(
+            `Published ${published} ${published === 1 ? "change" : "changes"}${environmentLabel ? ` to ${environmentLabel}` : ""} as revision ${displayRevisionId(artifacts.request.revision.id)}.`,
+          );
+        }
         return;
       }
       await prepareEncryptedPublication(publishVariables);
@@ -1125,12 +1151,14 @@ export const EnvironmentEditor = ({
   };
 
   const normalizedFilter = nameFilter.trim().toLowerCase();
-  const visibleVariables =
-    normalizedFilter === ""
-      ? variables
-      : variables.filter((variable) =>
-          variable.name.toLowerCase().includes(normalizedFilter),
-        );
+  // A deletion that is already published is gone, not something to undo;
+  // only a deletion in this draft is listed (with its undo).
+  const visibleVariables = variables.filter(
+    (variable) =>
+      !(variable.tombstone && !variable.hasDraftChange) &&
+      (normalizedFilter === "" ||
+        variable.name.toLowerCase().includes(normalizedFilter)),
+  );
   const variableNames = new Map<string, string>([
     ...remoteVariables.map((variable) => [variable.id, variable.name] as const),
     ...variables.map((variable) => [variable.id, variable.name] as const),
@@ -1375,7 +1403,7 @@ export const EnvironmentEditor = ({
           </div>
         ) : null}
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          {loadPhase === "failed" ? (
+          {loadPhase === "failed" && !waitingOnSharerConfirmation ? (
             <Button
               data-testid="environment-retry-read"
               onClick={retryRead}
@@ -1457,6 +1485,25 @@ export const EnvironmentEditor = ({
               >
                 Loading environment…
               </p>
+            ) : loadPhase === "failed" && waitingOnSharerConfirmation ? (
+              <div
+                className="px-6 py-10 text-center"
+                data-testid="environment-awaiting-confirmation"
+              >
+                <p className="font-medium">
+                  Confirm your teammate to see these values
+                </p>
+                <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+                  Compare fingerprints with the teammate who shared the keys,
+                  then confirm them in Members. The values load here as soon as
+                  you do.
+                </p>
+                {onOpenMembers ? (
+                  <Button className="mt-4" onClick={onOpenMembers} size="sm">
+                    Open Members
+                  </Button>
+                ) : null}
+              </div>
             ) : loadPhase === "failed" ? (
               <p
                 className="px-4 py-6 text-sm text-muted-foreground"
@@ -1518,6 +1565,13 @@ export const EnvironmentEditor = ({
                     onUndoDelete={() => undoDelete(variable.id)}
                     onValueChange={(value) => updateValue(variable.id, value)}
                     readOnlyDisclosure={readOnlyReason(actor, variable)}
+                    othersPrivate={
+                      variable.ownership === "USER_DEFINED_VALUE" &&
+                      variable.value === null &&
+                      typeof variable.ownerUserId === "string" &&
+                      variable.ownerUserId.length > 0 &&
+                      variable.ownerUserId !== actorUserId
+                    }
                     revealed={revealed.has(variable.id)}
                     variable={variable}
                   />
@@ -1535,7 +1589,7 @@ export const EnvironmentEditor = ({
             </p>
           ) : (
             <ul className="divide-y divide-border">
-              {historyRows.map((revision) => {
+              {[...historyRows].reverse().map((revision) => {
                 const isCurrent = revision.id === headRevision;
                 const rollbackTargetId = revision.rollbackTargetId;
                 const rollbackTargetKnown =

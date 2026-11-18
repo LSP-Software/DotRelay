@@ -424,7 +424,11 @@ is retained at `<path>.previous` so it stays recoverable. `pull --output <path>`
 decrypt fails the export before anything is written and names the Variables. A required
 Variable with no value is named too: interactive pull asks for it without echoing, and
 `--no-input` says to add it to a dotenv file and push. Optional Variables with no value are
-left out of the file, and the report counts them. Terminal stdout requires explicit `--reveal`
+left out of the file, and the report counts them. Another member's "Only me" (User-defined) Value
+is never sent to this Device, so `pull`, `diff`, `run` and `export` leave it out and name it
+instead of failing. `push` warns before it would replace a teammate's "Only me" Value with yours
+(it moves the Value to you, per [ADR 0008](../adr/0008-another-users-value-offers-keep-remote-only.md)),
+and `--no-input` refuses that without `--force`. Terminal stdout requires explicit `--reveal`
 and confirmation; ordinary diagnostics never contain Values.
 
 `pull` compares an existing file with the baseline it recorded. A local change that no verified

@@ -203,6 +203,37 @@ describe("publication artifacts", () => {
     expect(artifacts.encryptedLaneCount).toBe(1);
   });
 
+  test("an unchanged required Value this user can't see doesn't block publishing", async () => {
+    const encryption = await generateEncryptionKeyPair();
+    const signing = await generateSigningKeyPair();
+    const context = {
+      ...ids,
+      projectEpoch: 1,
+      expectedHeadId: null,
+      expectedHeadHash: null,
+      valueRecipientPublicKey: encryption.publicKey,
+      signingPrivateKey: signing.privateKey,
+    };
+    // A teammate's required "Only me" Value arrives absent; this user only
+    // changes another Variable.
+    const theirs = variable({
+      id: "88888888-8888-4888-8888-888888888888",
+      name: "THEIR_TOKEN",
+      ownership: "USER_DEFINED_VALUE",
+      value: null,
+      hasDraftChange: false,
+    });
+    await expect(
+      createPublicationArtifacts([variable(), theirs], context),
+    ).resolves.toBeDefined();
+    await expect(
+      createPublicationArtifacts(
+        [variable(), { ...theirs, hasDraftChange: true }],
+        context,
+      ),
+    ).rejects.toThrow("cannot have an absent Value");
+  });
+
   test("uses the stable Environment genesis parent and consistent authored time", async () => {
     const encryption = await generateEncryptionKeyPair();
     const signing = await generateSigningKeyPair();

@@ -16,6 +16,7 @@ export {
   DEFAULT_PASSWORD_KDF,
   decodeRecoveryCode,
   encodeRecoveryCode,
+  normalizeRecoveryCode,
   generateAccountMasterKey,
   generateRecoveryCode,
   KDF_ARGON2ID,

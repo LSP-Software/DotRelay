@@ -1814,6 +1814,7 @@
                         "required": [
                           "invitationId",
                           "providerSubject",
+                          "githubLogin",
                           "createdAt",
                           "expiresAt"
                         ],
@@ -1824,6 +1825,16 @@
                           },
                           "providerSubject": {
                             "type": "string"
+                          },
+                          "githubLogin": {
+                            "oneOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           },
                           "createdAt": {
                             "type": "string",

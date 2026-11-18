@@ -21,7 +21,11 @@ import {
   atomicWriteProtectedFile,
   resolveOutputTarget,
 } from "./output";
-import { classifyPullValues, pullVariableNames } from "./pull-values";
+import {
+  classifyPullValues,
+  othersPrivateNote,
+  pullVariableNames,
+} from "./pull-values";
 import { pad, visibleWidth } from "./theme";
 import { isUnreadableTerminalError, paint, readTerminalSecret } from "./ui";
 import {
@@ -214,12 +218,17 @@ export const runProtectedWorkflow = async (
         removed,
         unchangedCount,
         ...(optionalOmitted > 0 ? { optionalOmitted } : {}),
+        ...(groups.othersPrivate.length > 0
+          ? { privateOmitted: groups.othersPrivate.length }
+          : {}),
         ...pendingActionsField(synced.workflow.pendingActions),
       };
-    const omission =
+    const privateNote = othersPrivateNote(groups.othersPrivate);
+    const omission = `${
       optionalOmitted > 0
         ? `\n${optionalOmitted} optional ${optionalOmitted === 1 ? "variable has no value and was" : "variables have no value and were"} left out\n`
-        : "";
+        : ""
+    }${privateNote ? `\n${privateNote}\n` : ""}`;
     return { stdout: `${renderEnvDiff(changes, parsed.reveal)}${omission}` };
   }
   if (parsed.command === "pull") {
@@ -307,10 +316,12 @@ export const runProtectedWorkflow = async (
       })),
     ];
     const optionalOmitted = groups.optionalAbsent.length;
-    const omissionNote =
+    const privateNote = othersPrivateNote(groups.othersPrivate);
+    const omissionNote = `${
       optionalOmitted > 0
         ? `; ${optionalOmitted} optional ${optionalOmitted === 1 ? "variable has no value and was" : "variables have no value and were"} left out`
-        : "";
+        : ""
+    }${privateNote ? `. ${privateNote}` : ""}`;
     const rememberBaseline = async (): Promise<void> => {
       if (!outputPath) return;
       const hash = synced.page.currentHeadHash ?? new Uint8Array(48);
@@ -396,6 +407,9 @@ export const runProtectedWorkflow = async (
             unchanged: true,
             ...(parsed.json ? warningsField : {}),
             ...(optionalOmitted > 0 ? { optionalOmitted } : {}),
+            ...(groups.othersPrivate.length > 0
+              ? { privateOmitted: groups.othersPrivate.length }
+              : {}),
             ...(gitExclusion ? { gitExclusion } : {}),
             ...pendingActionsField(synced.workflow.pendingActions),
             message: `${outputPath} already matches the environment${omissionNote}`,
@@ -495,6 +509,9 @@ export const runProtectedWorkflow = async (
           ...(linkedTarget ? { target: linkedTarget } : {}),
           ...pendingActionsField(synced.workflow.pendingActions),
           ...(optionalOmitted > 0 ? { optionalOmitted } : {}),
+          ...(groups.othersPrivate.length > 0
+            ? { privateOmitted: groups.othersPrivate.length }
+            : {}),
           message: replaceExisting
             ? `Wrote ${entries.length} values to ${outputPath}${linkNote}; the old file is kept at ${outputPath}.previous${exclusionNote}${omissionNote}`
             : `Wrote ${entries.length} values to ${outputPath}${linkNote}${exclusionNote}${omissionNote}`,

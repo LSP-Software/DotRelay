@@ -30,6 +30,7 @@ const row = (revealed: boolean) =>
       onToggleReveal={() => undefined}
       onUndoDelete={() => undefined}
       onValueChange={() => undefined}
+      othersPrivate={false}
       readOnlyDisclosure={null}
       revealed={revealed}
       variable={variable}

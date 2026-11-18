@@ -1015,7 +1015,7 @@ describe("command-to-HTTP administration", () => {
         code: "device_not_active",
         exitCode: 6,
       });
-      expect(String(diagnostic.detail)).toContain("device enroll");
+      expect(String(diagnostic.detail)).toContain("device recover");
       // The service refuses a revoked Device its proof (ADR 0020), so the
       // administration request is never sent.
       expect(fixture.requests).toHaveLength(0);

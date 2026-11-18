@@ -462,6 +462,69 @@ export const readTerminalSecret = async (
   return (await readTerminalLine(question, terminal)).trim();
 };
 
+/**
+ * A one-line answer in the same boxed style as readTerminalSecret: the
+ * question stays active (◆) while typing and collapses to "◇ question
+ * answer" once answered. An empty answer is returned as "" so the caller
+ * can apply its default. Without a raw terminal it falls back to a plain
+ * line read.
+ */
+export const readTerminalText = async (
+  question: string,
+  terminal?: TerminalIo,
+): Promise<string> => {
+  const input = (terminal?.input ?? process.stdin) as ReadableRaw;
+  const output = terminal?.output ?? process.stderr;
+  if (!supportsRawMode(input)) return readTerminalLine(question, terminal);
+  input.setEncoding?.("utf8");
+  input.setRawMode?.(true);
+  input.resume?.();
+  const label = `${paintTone("◆", "brand")}  ${question}`;
+  // "Team name [LSP-Software]" offers a default in brackets. Once answered,
+  // the line shows the value that was used instead of the offer.
+  const offer = /^(.*?)\s*\[([^\]]+)\]$/.exec(question);
+  const answeredLabel = offer?.[1] ?? question;
+  const suggested = offer?.[2];
+  const line = (typed: string) =>
+    `${label}\n${bar()}  ${paintTone("›", "brand")} ${typed}`;
+  const written = rewriteRegion(output, 0, line(""));
+  let buffer = "";
+  let answered = false;
+  try {
+    for (;;) {
+      const key = await readRawKey(input);
+      if (key === "\u0003" || key === "\u001b")
+        throw new CliInvocationError("Cancelled.");
+      if (key.startsWith("\u001b")) continue;
+      for (const ch of key) {
+        if (ch === "\r" || ch === "\n") {
+          answered = true;
+          return buffer;
+        }
+        if (ch === "\u0008" || ch === "\u007f") {
+          buffer = [...buffer].slice(0, -1).join("");
+          rewriteRegion(output, written, line(buffer));
+          continue;
+        }
+        if (!/[\u0000-\u001f\u007f-\u009f]/.test(ch)) {
+          buffer += ch;
+          rewriteRegion(output, written, line(buffer));
+        }
+      }
+    }
+  } finally {
+    rewriteRegion(
+      output,
+      written,
+      answered
+        ? `${paintTone("◇", "brand")}  ${answeredLabel}  ${paintTone(buffer || suggested || "(default)", "faint")}\n${bar()}`
+        : `${paintTone("◇", "brand")}  ${answeredLabel}\n${bar()}`,
+    );
+    input.setRawMode?.(false);
+    input.pause?.();
+  }
+};
+
 export type { TerminalIo } from "./terminal";
 export type { ReadableRaw };
 export { readRawKey };

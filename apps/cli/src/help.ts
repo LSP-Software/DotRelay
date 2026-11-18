@@ -6,6 +6,7 @@ import {
   FLAG_TOKENS,
   type FlagKey,
   SUBCOMMANDS,
+  displayUsage,
   usageForLabel,
 } from "./args";
 import { banner, bold, paint, section } from "./components";
@@ -758,7 +759,7 @@ const renderLeafHelp = (label: string): string => {
       `There's no help for ${label}. Usage: dotrelay help [<command>]`,
     );
   const lines = [
-    `${bold("Usage:")} ${usageForLabel(label)}`,
+    `${bold("Usage:")} ${displayUsage(usageForLabel(label))}`,
     "",
     ...wrapLines(entry.about, 64, "  ").map((line) => paint(line, "muted")),
   ];

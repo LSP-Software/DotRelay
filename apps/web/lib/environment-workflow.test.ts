@@ -1263,7 +1263,7 @@ test("read-only Variables carry a reason for their locked controls", () => {
     "Only the person who provided it, or a team admin, can change it.",
   );
   expect(readOnlyReason(member, foreignToken)).toBe(
-    "This value belongs to another user's account.",
+    "Another member's private value. Only they can read or change it.",
   );
   expect(
     readOnlyReason({ role: "ADMIN", actorUserId: null }, foreignShared),

@@ -488,7 +488,11 @@ export const validatePublicationVariables = (
       if (variable.value !== null) return "A tombstone cannot retain a Value.";
       continue;
     }
-    if (variable.required && variable.value === null)
+    // Only a Value this publication writes must be present. An unchanged
+    // Variable's lane is carried over from the head, not republished, and
+    // may be absent here because it is another member's User-defined Value
+    // that the service never sends to this user.
+    if (variable.required && variable.value === null && variable.hasDraftChange)
       return `required Variable "${variable.name}" cannot have an absent Value.`;
     if (names.has(variable.name))
       return `duplicate live Variable name "${variable.name}".`;

@@ -26,7 +26,7 @@ import {
   writePublicationBaseline,
 } from "./baseline-store";
 import { classifyVariablesInteractively } from "./classify-ui";
-import { reviewFrame } from "./components";
+import { reviewFrame, wrapForRail } from "./components";
 import {
   type ClassifiedDotenvEntry,
   classifyDotenv,
@@ -744,6 +744,36 @@ export const publish = async (
       { changedCount: overwrittenCount },
       "baseline_unverifiable",
     );
+  // An "Only me" Value belongs to one member. Publishing your own value for
+  // one a teammate set replaces theirs, and they can't get it back (ADR
+  // 0008), so the review says so and automation needs --force.
+  const actorUserId = synced.workflow.publicationContext.actorUserId;
+  const takenOver = changes.filter((change) => {
+    if (change.kind === "added") return false;
+    const remote = synced.variables.find(
+      (variable) => variable.name === change.name && !variable.tombstone,
+    );
+    return (
+      remote?.ownership === "USER_DEFINED_VALUE" &&
+      typeof remote.ownerUserId === "string" &&
+      remote.ownerUserId.length > 0 &&
+      remote.ownerUserId !== actorUserId
+    );
+  });
+  const takeoverNames = takenOver
+    .map((change) => sanitizeCliText(change.name))
+    .join(", ");
+  const takeoverWarning =
+    takenOver.length > 0
+      ? `${takeoverNames} ${takenOver.length === 1 ? "is" : "are"} another member's private ("Only me") ${takenOver.length === 1 ? "value" : "values"}. Publishing replaces ${takenOver.length === 1 ? "it" : "them"} with yours, and they lose ${takenOver.length === 1 ? "theirs" : "theirs"}. Remove ${takenOver.length === 1 ? "it" : "them"} from your file unless that's what you want.`
+      : null;
+  if (options.noInput && takeoverWarning && !options.force)
+    throw new CliError(
+      "invocation",
+      `${takeoverWarning} Nothing was published. Run it again with --force to replace ${takenOver.length === 1 ? "it" : "them"}.`,
+      { changedCount: takenOver.length },
+      "deletion_requires_approval",
+    );
   if (options.noInput && removedCount > 0 && !options.force)
     throw new CliError(
       "invocation",
@@ -780,7 +810,16 @@ export const publish = async (
     } else {
       const frame = reviewFrame({
         title: `Publish to ${environment}`,
-        body: reviewBody(changes, destination, parsed.reveal),
+        body: reviewBody(
+          changes,
+          destination,
+          parsed.reveal,
+          takeoverWarning
+            ? wrapForRail(`▲ ${takeoverWarning}`).map(
+                (row) => `  ${paint(row, "warn")}`,
+              )
+            : [],
+        ),
         question: publicationConfirmQuestion(),
       });
       output.write(`${frame}\n`);

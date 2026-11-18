@@ -260,7 +260,9 @@ for (const lostResponse of [false, true])
     await editor.getByLabel("FEATURE_GATE Value").fill("newer-value");
     await expect(featureRow()).toContainText("Not published");
 
-    await expect(page.getByText(/^Published \S+\.$/)).toBeVisible({
+    await expect(
+      page.getByText(/^Published .* as revision \S+\.$/),
+    ).toBeVisible({
       timeout: 15_000,
     });
 
@@ -269,10 +271,10 @@ for (const lostResponse of [false, true])
     // verified context and the acting User as its author.
     const publishedMessage =
       (await page
-        .getByText(/^Published \S+\.$/)
+        .getByText(/^Published .* as revision \S+\.$/)
         .first()
         .textContent()) ?? "";
-    const shortId = publishedMessage.replace("Published ", "").replace(".", "");
+    const shortId = /as revision (\S+)\.$/.exec(publishedMessage)?.[1] ?? "";
     expect(shortId).toHaveLength(8);
     await editor.getByRole("tab", { name: "History" }).click();
     const publishedRow = editor

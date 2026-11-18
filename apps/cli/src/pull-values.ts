@@ -6,6 +6,12 @@ export type PullValueGroups = Readonly<{
   readonly optionalAbsent: readonly DecodedVariable[];
   readonly requiredMissing: readonly DecodedVariable[];
   readonly unreadable: readonly DecodedVariable[];
+  /**
+   * "Only me" Values another member set. They are private to that member
+   * and the service never sends them here, so they are left out of the
+   * file rather than treated as missing or broken (ADR 0008).
+   */
+  readonly othersPrivate: readonly DecodedVariable[];
 }>;
 
 export const classifyPullValues = (
@@ -16,6 +22,7 @@ export const classifyPullValues = (
   const optionalAbsent: DecodedVariable[] = [];
   const requiredMissing: DecodedVariable[] = [];
   const unreadable: DecodedVariable[] = [];
+  const othersPrivate: DecodedVariable[] = [];
   for (const variable of variables) {
     if (variable.tombstone) continue;
     if (variable.value !== null) {
@@ -27,7 +34,7 @@ export const classifyPullValues = (
       typeof variable.ownerUserId === "string" &&
       variable.ownerUserId.length > 0 &&
       variable.ownerUserId !== actorUserId;
-    if (ownedByOtherUser) unreadable.push(variable);
+    if (ownedByOtherUser) othersPrivate.push(variable);
     else if (variable.required) requiredMissing.push(variable);
     else optionalAbsent.push(variable);
   }
@@ -38,8 +45,20 @@ export const classifyPullValues = (
     optionalAbsent: Object.freeze(optionalAbsent),
     requiredMissing: Object.freeze(requiredMissing),
     unreadable: Object.freeze(unreadable),
+    othersPrivate: Object.freeze(othersPrivate),
   });
 };
+
+/**
+ * A one-line note naming the teammates' private values a command left out,
+ * or "" when there are none.
+ */
+export const othersPrivateNote = (
+  variables: readonly DecodedVariable[],
+): string =>
+  variables.length === 0
+    ? ""
+    : `${pullVariableNames(variables)} ${variables.length === 1 ? "is" : "are"} private to another member ("Only me"), so ${variables.length === 1 ? "it was" : "they were"} left out.`;
 
 export const pullVariableNames = (
   variables: readonly DecodedVariable[],

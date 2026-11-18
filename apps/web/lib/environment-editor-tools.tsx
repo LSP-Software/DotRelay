@@ -170,7 +170,7 @@ export const ImportDotenvDialog = ({
                   [
                     "USER_DEFINED_VALUE",
                     "Only me",
-                    "Each person sets their own value; yours stays private.",
+                    "Private to you. Only your devices can read it; teammates don't get it.",
                   ],
                 ] as const
               ).map(([value, label, hint]) => (

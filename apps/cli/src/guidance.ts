@@ -142,8 +142,8 @@ export const guidanceFor = (
       return {
         title: "This device is no longer active",
         explain:
-          "It was revoked or replaced. Enroll it again and approve it from a device you still use.",
-        next: "dotrelay device enroll",
+          "It was revoked or replaced. Set it up again with your recovery code, or with a transfer code sent from a device you still use.",
+        next: "dotrelay device recover",
       };
     case "device_proof_required":
       return {

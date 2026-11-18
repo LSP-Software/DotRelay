@@ -168,6 +168,13 @@ describe("recovery code codec", () => {
     const code = generateRecoveryCode();
     const text = encodeRecoveryCode(code);
     expect(decodeRecoveryCode(text.toLowerCase())).toEqual(code);
+    expect(
+      decodeRecoveryCode(` ${text.replaceAll("-", " ").toLowerCase()}\n`),
+    ).toEqual(code);
+    const zeros = encodeRecoveryCode(new Uint8Array(32));
+    expect(decodeRecoveryCode(zeros.replaceAll("0", "O"))).toEqual(
+      new Uint8Array(32),
+    );
     expect(() => decodeRecoveryCode(text.slice(0, -2))).toThrow(
       "recovery code is malformed",
     );

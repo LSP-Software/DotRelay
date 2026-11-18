@@ -2,6 +2,7 @@ import {
   ENCRYPTION_PASSWORD_MIN_LENGTH,
   encryptionPasswordAdvice,
   encryptionPasswordProblem,
+  normalizeRecoveryCode,
 } from "@dotrelay/client";
 import {
   KeyRound,
@@ -188,6 +189,10 @@ export const RecoveryArea = ({
   onSendTransfer,
 }: RecoveryAreaProps) => {
   const newPasswordProblem = encryptionPasswordProblem(addPassword);
+  // The wrappers list is readable before this browser has a Device. An
+  // account with none has never been set up anywhere, so there is no
+  // recovery code to ask for.
+  const newAccount = recoveryLoaded && recoveryWrappers.length === 0;
   return (
     <section id="recovery" data-testid="recovery-area">
       {setupMode ? null : (
@@ -244,32 +249,37 @@ export const RecoveryArea = ({
                 : "Set up this browser"}
             </CardTitle>
             <CardDescription>
-              This browser needs its own keys to open your workspace.
+              {newAccount
+                ? "This browser needs its own keys before it can open your workspace. It takes a few seconds."
+                : "This browser needs its own keys to open your workspace."}
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              Already use DotRelay in the CLI or another browser? Unlock this
-              browser with the recovery code you saved then.
-            </p>
-            <Label htmlFor="lost-device-recovery-code">Recovery code</Label>
-            <Input
-              id="lost-device-recovery-code"
-              type="password"
-              autoComplete="off"
-              value={unlockInput}
-              onChange={(event) => onUnlockInput(event.target.value)}
-              disabled={recoveryBusy}
-            />
-            <Button
-              disabled={
-                recoveryBusy || connection !== "online" || !unlockInput.trim()
-              }
-              onClick={() => onUnlock("recovery-code", unlockInput)}
-            >
-              Unlock with recovery code
-            </Button>
-          </CardContent>
+          {newAccount ? null : (
+            <CardContent className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                {accountExistsElsewhere
+                  ? "Your account is already set up on another device. Enter the recovery code you saved then to unlock this browser."
+                  : "Already use DotRelay in the CLI or another browser? Unlock this browser with the recovery code you saved then."}
+              </p>
+              <Label htmlFor="lost-device-recovery-code">Recovery code</Label>
+              <Input
+                id="lost-device-recovery-code"
+                type="password"
+                autoComplete="off"
+                value={unlockInput}
+                onChange={(event) => onUnlockInput(event.target.value)}
+                disabled={recoveryBusy}
+              />
+              <Button
+                disabled={
+                  recoveryBusy || connection !== "online" || !unlockInput.trim()
+                }
+                onClick={() => onUnlock("recovery-code", unlockInput)}
+              >
+                Unlock with recovery code
+              </Button>
+            </CardContent>
+          )}
           {deviceSetupInProgress ? (
             <CardContent
               role="status"
@@ -541,12 +551,10 @@ export const RecoveryArea = ({
             <CardHeader>
               <CardTitle>If none of these work</CardTitle>
               <CardDescription>
-                Your values are stored as ciphertext, and the server never sees
-                or decrypts them: signing in with GitHub only identifies the
-                account. If every recovery method and every device that holds
-                the account's key is lost, the content is unrecoverable. A human
-                with the server's database can restore the ciphertext but cannot
-                read it.
+                Only your devices can decrypt your values. Signing in with
+                GitHub only tells DotRelay who you are. If you lose every device
+                and every recovery method, nobody can get your values back, not
+                even whoever runs the server.
               </CardDescription>
             </CardHeader>
           </Card>
@@ -798,32 +806,19 @@ export const RecoveryArea = ({
                 </div>
               </CardContent>
             ) : null}
-            <CardFooter>
-              <Button
-                data-testid="send-transfer"
-                disabled={
-                  recoveryBusy || !peerDevices || peerDevices.length === 0
-                }
-                size="sm"
-                variant="outline"
-                onClick={() => onTransferTarget(peerDevices?.[0]?.id ?? null)}
-              >
-                Send the key to another device
-              </Button>
-            </CardFooter>
           </Card>
           <Card className="mt-4">
             <CardHeader>
               <CardTitle>
                 <span className="flex items-center gap-2">
                   <MonitorSmartphone aria-hidden="true" className="size-4" />
-                </span>{" "}
-                Other devices
+                  Send the key to another device
+                </span>
               </CardTitle>
               <CardDescription>
-                Hand this account's key to another of your devices. Creating a
-                transfer shows a transfer code sealed to that device. It works
-                once and expires after a few minutes.
+                Unlock another of your devices without a recovery code. You get
+                a one-time transfer code to enter on that device. It expires
+                after a few minutes.
               </CardDescription>
             </CardHeader>
             {sentTransfer &&
@@ -924,12 +919,10 @@ export const RecoveryArea = ({
             <CardHeader>
               <CardTitle>If you lose everything</CardTitle>
               <CardDescription>
-                Your values are stored as ciphertext. Signing in with GitHub
-                never decrypts them: the server cannot read your values, and
-                neither can anyone with the server's database. If every recovery
-                method above is lost and every device that held the account's
-                key is gone, the content is unrecoverable — that is the price of
-                the key never leaving your devices.
+                Only your devices can decrypt your values. Signing in with
+                GitHub doesn&apos;t, and neither the server nor anyone with its
+                database can. So if you lose every device and every recovery
+                method above, nobody can get your values back.
               </CardDescription>
             </CardHeader>
           </Card>
@@ -957,6 +950,13 @@ export const RecoveryCodeDialog = ({
   onDismiss,
 }: RecoveryCodeDialogProps) => {
   const [confirmation, setConfirmation] = useState("");
+  const confirmationMatches =
+    code !== null &&
+    normalizeRecoveryCode(confirmation) === normalizeRecoveryCode(code);
+  const confirmationMismatch =
+    !confirmationMatches &&
+    normalizeRecoveryCode(confirmation).length >=
+      normalizeRecoveryCode(code ?? "").length;
   return (
     <Dialog
       onOpenChange={(open) => {
@@ -981,13 +981,13 @@ export const RecoveryCodeDialog = ({
             value={code ?? ""}
           />
           <p className="text-sm text-muted-foreground">
-            The code is shown once and is never stored in this browser. If you
-            lose it, and every other recovery method, the account's content
-            becomes unrecoverable.
+            Keep it somewhere safe, like a password manager. DotRelay doesn't
+            keep a copy, so if you lose it and every device, nobody can get your
+            values back.
           </p>
           <div className="space-y-2">
             <Label htmlFor="recovery-code-confirmation">
-              Confirm the code from where you saved it
+              Paste or type the code from where you saved it
             </Label>
             <Input
               autoComplete="off"
@@ -996,7 +996,22 @@ export const RecoveryCodeDialog = ({
               onChange={(event) => setConfirmation(event.target.value)}
               spellCheck={false}
               value={confirmation}
+              aria-invalid={confirmationMismatch || undefined}
+              aria-describedby={
+                confirmationMismatch
+                  ? "recovery-code-confirmation-mismatch"
+                  : undefined
+              }
             />
+            {confirmationMismatch ? (
+              <p
+                className="text-sm text-destructive"
+                id="recovery-code-confirmation-mismatch"
+              >
+                That doesn't match the code above. Check it against where you
+                saved it.
+              </p>
+            ) : null}
           </div>
           {error ? (
             <Alert role="alert">
@@ -1008,7 +1023,7 @@ export const RecoveryCodeDialog = ({
         <DialogFooter>
           <Button
             data-testid="recovery-code-saved"
-            disabled={busy || confirmation.trim().toUpperCase() !== code}
+            disabled={busy || !confirmationMatches}
             onClick={() => {
               onConfirm();
             }}

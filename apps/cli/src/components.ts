@@ -88,6 +88,16 @@ const wrapToWidth = (text: string, room: number): string[] => {
 
 const railRoom = (width: number): number => Math.max(20, width - 4);
 
+/**
+ * Text wrapped to fit inside a review frame's body, one string per row,
+ * for callers that add their own indent and tone.
+ */
+export const wrapForRail = (
+  text: string,
+  indent = 2,
+  width = terminalWidth(),
+): string[] => wrapToWidth(text, railRoom(width) - indent);
+
 /** One or more lines of text hanging off the rail. */
 export const railText = (
   text: string,

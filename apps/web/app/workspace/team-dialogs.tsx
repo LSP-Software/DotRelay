@@ -109,6 +109,71 @@ export const RemoveMemberDialog = ({
   </Dialog>
 );
 
+export type FingerprintTarget = Readonly<{
+  readonly userId: string;
+  readonly membershipId: string;
+  readonly label: string;
+  readonly fingerprint: string;
+  /** The member's account key changed since this browser last saw it. */
+  readonly changed: boolean;
+}>;
+
+// Confirming a fingerprint is the step that lets this browser accept keys
+// from a teammate, so it asks for an out-of-band comparison first.
+export const ConfirmFingerprintDialog = ({
+  target,
+  onCancel,
+  onConfirm,
+}: Readonly<{
+  readonly target: FingerprintTarget | null;
+  readonly onCancel: () => void;
+  readonly onConfirm: (target: FingerprintTarget) => void;
+}>) => (
+  <Dialog
+    onOpenChange={(open) => {
+      if (!open) onCancel();
+    }}
+    open={target !== null}
+  >
+    <DialogContent data-testid="confirm-fingerprint-dialog" role="alertdialog">
+      <DialogHeader>
+        <DialogTitle>
+          {target?.changed
+            ? `Trust ${target.label}'s new fingerprint?`
+            : `Confirm ${target?.label ?? "this member"}'s fingerprint?`}
+        </DialogTitle>
+        <DialogDescription>
+          Ask {target?.label ?? "them"} to read out the fingerprint shown next
+          to their name on their own Members page, over a call or a chat you
+          already trust. Only confirm if it matches exactly.
+        </DialogDescription>
+      </DialogHeader>
+      <code className="block rounded-lg border bg-muted/30 px-3 py-2 text-center font-mono text-sm">
+        {target?.fingerprint}
+      </code>
+      {target?.changed ? (
+        <Alert className="border-amber-300/30 bg-amber-300/5">
+          <AlertTitle>Their account key changed</AlertTitle>
+          <AlertDescription>
+            This is normal only if they reset their account. If you can&apos;t
+            reach them, cancel.
+          </AlertDescription>
+        </Alert>
+      ) : null}
+      <DialogFooter>
+        <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
+        <Button
+          onClick={() => {
+            if (target) onConfirm(target);
+          }}
+        >
+          It matches
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
+);
+
 export type InvitationTarget = Readonly<{
   readonly invitationId: string;
   readonly label: string;

@@ -136,6 +136,7 @@ import {
 import type { TerminalIo } from "./terminal";
 import {
   confirmAction,
+  readTerminalText,
   rewriteRegion,
   selectOption,
   UNREADABLE_TERMINAL_DETAIL,
@@ -702,8 +703,17 @@ const renderDeviceResult = (
     });
   if (typeof value.expiresAt === "string")
     rows.push({ key: "Expires", value: value.expiresAt, tone: "muted" });
+  // A pending enrollment is only half done: say who acts next, and offer
+  // the recovery route for someone whose other devices are all browsers
+  // (a browser can't approve a CLI enrollment).
+  const pendingEnrollment =
+    value.active === false && typeof value.request === "string";
   const message =
-    typeof value.message === "string" ? sanitizeCliText(value.message) : "";
+    typeof value.message === "string"
+      ? sanitizeCliText(value.message)
+      : pendingEnrollment
+        ? `Waiting for approval. Copy the handoff file to a machine where the CLI is already set up and run dotrelay device approve --from ${String(value.request)} there, then run dotrelay device complete --from ${String(value.request)} here. If you have no other CLI, run dotrelay device recover with your recovery code instead.`
+        : "";
   const lines: string[] = [];
   if (rows.length > 0) lines.push(railLines(kv(rows)), bar());
   lines.push(closingLines(message.length > 0 ? message : "Done", closing));
@@ -2729,12 +2739,8 @@ const execute = async (
         );
       const ask = async (question: string): Promise<string> => {
         if (runtime.prompt) return runtime.prompt(question);
-        const { readTerminalLine } = await import("./terminal");
         try {
-          return await readTerminalLine(
-            `${glyph("info")}  ${question}`,
-            runtime.terminal,
-          );
+          return await readTerminalText(question, runtime.terminal);
         } catch {
           throw new CliInvocationError(UNREADABLE_TERMINAL_DETAIL);
         }
@@ -3031,14 +3037,10 @@ const chooseServer = async (runtime: CliRuntime): Promise<string> => {
     },
   );
   if (choice !== "other") return choice;
-  const { readTerminalLine } = await import("./terminal");
   const typed = (
     runtime.prompt
       ? await runtime.prompt("Server address")
-      : await readTerminalLine(
-          `${glyph("info")}  Server address`,
-          runtime.terminal,
-        )
+      : await readTerminalText("Server address", runtime.terminal)
   ).trim();
   if (typed.length === 0)
     throw new CliInvocationError("Enter the server's address to continue.");

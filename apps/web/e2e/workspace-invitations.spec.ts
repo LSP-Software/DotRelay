@@ -119,8 +119,8 @@ test("resolving an unknown GitHub login keeps the form and reports the problem",
   await page.locator("aside").getByRole("button", { name: "Members" }).click();
   await page.getByRole("button", { name: "Invite member" }).click();
 
-  await page.getByLabel("GitHub login").fill("nobody-here");
-  await page.getByRole("button", { name: "Resolve" }).click();
+  await page.getByLabel("GitHub username").fill("nobody-here");
+  await page.getByRole("button", { name: "Continue" }).click();
 
   // The failed resolution stays on the form with an actionable explanation;
   // nothing is created.
@@ -130,7 +130,7 @@ test("resolving an unknown GitHub login keeps the form and reports the problem",
     ),
   ).toBeVisible();
   await expect(page.getByTestId("invitation-dialog")).toBeVisible();
-  await expect(page.getByLabel("GitHub login")).toHaveValue("nobody-here");
+  await expect(page.getByLabel("GitHub username")).toHaveValue("nobody-here");
   expect(resolveCalls).toBe(1);
   expect(createCalls).toBe(0);
 });
@@ -158,11 +158,11 @@ test("a rejected invitation keeps the resolved identity and the error", async ({
   await page.locator("aside").getByRole("button", { name: "Members" }).click();
   await page.getByRole("button", { name: "Invite member" }).click();
 
-  await page.getByLabel("GitHub login").fill("octocat");
-  await page.getByRole("button", { name: "Resolve" }).click();
+  await page.getByLabel("GitHub username").fill("octocat");
+  await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByText("GitHub ID 583231")).toBeVisible();
 
-  await page.getByRole("button", { name: "Create invitation" }).click();
+  await page.getByRole("button", { name: /^Invite @/ }).click();
 
   // The create failed, so the dialog stays open on the confirmed identity
   // with the service's explanation, ready to retry.
@@ -258,7 +258,7 @@ test("an invitee accepts the invitation addressed to them and goes pending", asy
   // The wait is not a dead end: it names who acts next and what to do once
   // they have.
   await expect(card).toContainText("share the project keys with you");
-  await expect(card).toContainText("refresh this page");
+  await expect(card).toContainText("updates by itself");
   await expect(card).toContainText("dotrelay pull");
   await expect(
     card.getByRole("button", { name: "Accept invitation" }),
@@ -450,9 +450,9 @@ test("the pending invitation cap is explained when inviting", async ({
   await trustWorkspaceServer(page);
   await page.locator("aside").getByRole("button", { name: "Members" }).click();
   await page.getByRole("button", { name: "Invite member" }).click();
-  await page.getByLabel("GitHub login").fill("octocat");
-  await page.getByRole("button", { name: "Resolve" }).click();
-  await page.getByRole("button", { name: "Create invitation" }).click();
+  await page.getByLabel("GitHub username").fill("octocat");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByRole("button", { name: /^Invite @/ }).click();
   await expect(page.getByTestId("invitation-dialog")).toContainText(
     "50 pending invitations",
   );

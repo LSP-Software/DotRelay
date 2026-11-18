@@ -7,6 +7,7 @@ import {
   type FlagKey,
   parseArguments,
   SUBCOMMANDS,
+  displayUsage,
   usageForLabel,
 } from "./args";
 import {
@@ -71,9 +72,10 @@ describe("command help contract", () => {
   test("help usage lines match the parser usage table", () => {
     for (const [label] of Object.entries(COMMAND_HELP)) {
       const rendered = renderCommandHelp(label);
-      expect(rendered.startsWith(`Usage: ${usageForLabel(label)}`), label).toBe(
-        true,
-      );
+      expect(
+        rendered.startsWith(`Usage: ${displayUsage(usageForLabel(label))}`),
+        label,
+      ).toBe(true);
     }
   });
 
@@ -143,7 +145,7 @@ describe("command help contract", () => {
     expect(rollback.stdout).not.toBe(`${everyday}\n`);
     const recover = await run(["device", "recover", "--help"]);
     expect(recover.stdout).toContain(
-      "Usage: dotrelay device recover | --transfer <transfer-code> | --recovery-code-file <path>",
+      "Usage: dotrelay device recover [--transfer <transfer-code> | --recovery-code-file <path>]",
     );
     const begin = await run(["device", "begin", "--help"]);
     expect(begin.stdout).toContain(
@@ -170,7 +172,7 @@ describe("command help contract", () => {
     expect(one.stdout).toContain("--variable");
     const nested = await run(["help", "device", "recover"]);
     expect(nested.stdout).toContain(
-      "Usage: dotrelay device recover | --transfer <transfer-code> | --recovery-code-file <path>",
+      "Usage: dotrelay device recover [--transfer <transfer-code> | --recovery-code-file <path>]",
     );
     const group = await run(["help", "profile"]);
     expect(group.stdout).toContain("Subcommands:");

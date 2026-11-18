@@ -61,6 +61,11 @@ import {
   type WorkspaceProfileId,
 } from "@/lib/workspace-boundary";
 
+// Devices this page already described. The fields only change with a new
+// browser version, so once per page load is enough; describing on every
+// boundary tick sent a write every two seconds during setup.
+const describedDevices = new Set<string>();
+
 // Best-effort self-describe: refreshes this browser's display name and
 // client fields on the Server Profile after the boundary is known. Failures
 // must not take the session offline; the next tick retries.
@@ -68,9 +73,11 @@ const refreshDeviceDisplay = async (
   apiOrigin: string,
   deviceId: string,
 ): Promise<void> => {
+  const key = `${apiOrigin}\n${deviceId}`;
+  if (describedDevices.has(key)) return;
   try {
     const info = describeThisBrowser();
-    await fetchWithDeviceProof(
+    const response = await fetchWithDeviceProof(
       knownDeviceProof(apiOrigin, deviceId),
       `${apiOrigin}/api/v1/devices/self`,
       {
@@ -92,6 +99,7 @@ const refreshDeviceDisplay = async (
         }),
       },
     );
+    if (response.ok) describedDevices.add(key);
   } catch {
     // display metadata is cosmetic; ignore network and parse failures
   }
@@ -872,7 +880,14 @@ export const loadWorkspaceSession = (
           ring: sharedValueKeyRing,
         });
       if (cancelled()) return;
-      const session = createEnvironmentProtocolSession({
+      // A grant this browser couldn't use is almost always from a teammate
+      // whose fingerprint isn't confirmed here yet (ADR 0022); say so instead
+      // of the generic "can't read this project" message.
+      const projectKeyBlocked =
+        sharedValueSecret === undefined && boundary.epochGrant
+          ? ("unconfirmed-sharer" as const)
+          : undefined;
+      const createdSession = createEnvironmentProtocolSession({
         context: sharedValueSecret
           ? { ...context, sharedValueSecret }
           : context,
@@ -890,6 +905,9 @@ export const loadWorkspaceSession = (
           : {}),
         ...(userDefinedValueSecret ? { userDefinedValueSecret } : {}),
       });
+      const session = projectKeyBlocked
+        ? { ...createdSession, projectKeyBlocked }
+        : createdSession;
       if (cancelled()) return;
       if (
         environment.id !== environmentId ||

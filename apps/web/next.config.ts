@@ -49,8 +49,34 @@ if (
   process.env.NEXT_PUBLIC_DOTRELAY_WORKSPACE_FIXTURE = "1";
 }
 
+// The browser bundle only sees NEXT_PUBLIC_* values. Release images set the
+// public API and web origins at build time; a local `bun run dev` only has
+// the server-side names in the root .env, so inline those for the browser.
+// Without this the browser has no API origin and can never act as the Device
+// it just set up. (Assigning to process.env here instead makes the dev
+// server reload every page in a loop.)
+const publicOrigin = (publicName: string, sources: readonly string[]) =>
+  process.env[publicName] ??
+  sources.map((name) => process.env[name]).find(Boolean);
+const publicOrigins = Object.fromEntries(
+  [
+    [
+      "NEXT_PUBLIC_DOTRELAY_API_ORIGIN",
+      publicOrigin("NEXT_PUBLIC_DOTRELAY_API_ORIGIN", [
+        "DOTRELAY_API_ORIGIN",
+        "SERVER_PROFILE_ORIGIN",
+      ]),
+    ],
+    [
+      "NEXT_PUBLIC_WEB_ORIGIN",
+      publicOrigin("NEXT_PUBLIC_WEB_ORIGIN", ["WEB_ORIGIN"]),
+    ],
+  ].filter((entry): entry is [string, string] => Boolean(entry[1])),
+);
+
 const nextConfig: NextConfig = {
   output: "standalone",
+  env: publicOrigins,
 };
 
 export default nextConfig;

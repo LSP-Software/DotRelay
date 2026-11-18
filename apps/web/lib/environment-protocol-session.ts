@@ -66,6 +66,11 @@ export const deviceAuthoredAtNotBeforeMs = (
 
 export type EnvironmentProtocolSession = Readonly<{
   readonly context: PublicationContext;
+  /**
+   * Why no Project key opened, when the workspace can tell: a teammate's
+   * grant is waiting for the user to confirm that teammate's fingerprint.
+   */
+  readonly projectKeyBlocked?: "unconfirmed-sharer";
   readonly transport: ProtocolTransport;
   readonly signingTrustKeys: RevisionSigningTrust;
   readonly decodeVariables: (

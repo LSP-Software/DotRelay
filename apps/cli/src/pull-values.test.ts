@@ -19,7 +19,7 @@ const variable = (
   });
 
 describe("pull value classification", () => {
-  test("omits optional absences and separates required gaps from unreadable values", () => {
+  test("omits optional absences, separates required gaps, and sets aside teammates' private values", () => {
     const groups = classifyPullValues(
       [
         variable("PRESENT", "value"),
@@ -39,7 +39,8 @@ describe("pull value classification", () => {
     expect(groups.requiredMissing.map((entry) => entry.name)).toEqual([
       "REQUIRED",
     ]);
-    expect(groups.unreadable.map((entry) => entry.name)).toEqual(["THEIRS"]);
+    expect(groups.unreadable).toEqual([]);
+    expect(groups.othersPrivate.map((entry) => entry.name)).toEqual(["THEIRS"]);
   });
 
   test("keeps Environment order so a pull file is not alphabetical", () => {

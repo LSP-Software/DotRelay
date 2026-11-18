@@ -1144,8 +1144,20 @@ export const encodeRecoveryCode = (code: Uint8Array): string => {
   return groups.join("-");
 };
 
+/**
+ * The recovery code's 52 symbols with what people add or mistype when they
+ * copy one by hand removed: case, spaces, line breaks and dashes, and the
+ * Crockford look-alikes O (for 0) and I or L (for 1).
+ */
+export const normalizeRecoveryCode = (text: string): string =>
+  text
+    .toUpperCase()
+    .replace(/[\s-]+/g, "")
+    .replaceAll("O", "0")
+    .replace(/[IL]/g, "1");
+
 export const decodeRecoveryCode = (text: string): Uint8Array => {
-  const normalized = text.toUpperCase().replaceAll("-", "").trim();
+  const normalized = normalizeRecoveryCode(text);
   if (!/^[0-9A-HJKMNP-TV-Z]{52}$/.test(normalized))
     throw new TypeError("recovery code is malformed");
   const bytes = new Uint8Array(32);
