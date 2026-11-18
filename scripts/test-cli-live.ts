@@ -1101,21 +1101,22 @@ try {
   );
   state.omitUserDefinedValue = false;
   state.discloseAsOtherUser = false;
+  // Another member's "Only me" Value is never sent here (ADR 0008): pull
+  // writes the rest, leaves that Variable out, reports it, and never shows
+  // a Value in its output.
   if (
-    missing.exitCode !== 3 ||
-    !missing.stderr.includes('"code":"missing_values"') ||
+    missing.exitCode !== 0 ||
+    !missing.stdout.includes('"privateOmitted":1') ||
     missing.stdout.includes("secret") ||
     missing.stderr.includes("secret")
   )
-    throw new Error("packaged CLI missing-value safety contract failed");
-  await access(join(isolatedDirectory, "missing.env"), constants.F_OK)
-    .then(() => {
-      throw new Error("missing-value export created an output file");
-    })
-    .catch((error) => {
-      if (error instanceof Error && error.message.includes("created"))
-        throw error;
-    });
+    throw new Error("packaged CLI private-value omission contract failed");
+  const missingFile = await readFile(
+    join(isolatedDirectory, "missing.env"),
+    "utf8",
+  );
+  if (/^USER_VALUE=/m.test(missingFile))
+    throw new Error("pull wrote another member's private Variable");
   const rollback = await runJson(
     [
       "rollback",

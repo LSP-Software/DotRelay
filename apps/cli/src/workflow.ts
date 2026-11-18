@@ -218,6 +218,9 @@ export const runProtectedWorkflow = async (
         removed,
         unchangedCount,
         ...(optionalOmitted > 0 ? { optionalOmitted } : {}),
+        ...(groups.othersPrivate.length > 0
+          ? { privateOmitted: groups.othersPrivate.length }
+          : {}),
         ...pendingActionsField(synced.workflow.pendingActions),
       };
     const privateNote = othersPrivateNote(groups.othersPrivate);
@@ -404,6 +407,9 @@ export const runProtectedWorkflow = async (
             unchanged: true,
             ...(parsed.json ? warningsField : {}),
             ...(optionalOmitted > 0 ? { optionalOmitted } : {}),
+            ...(groups.othersPrivate.length > 0
+              ? { privateOmitted: groups.othersPrivate.length }
+              : {}),
             ...(gitExclusion ? { gitExclusion } : {}),
             ...pendingActionsField(synced.workflow.pendingActions),
             message: `${outputPath} already matches the environment${omissionNote}`,
@@ -503,6 +509,9 @@ export const runProtectedWorkflow = async (
           ...(linkedTarget ? { target: linkedTarget } : {}),
           ...pendingActionsField(synced.workflow.pendingActions),
           ...(optionalOmitted > 0 ? { optionalOmitted } : {}),
+          ...(groups.othersPrivate.length > 0
+            ? { privateOmitted: groups.othersPrivate.length }
+            : {}),
           message: replaceExisting
             ? `Wrote ${entries.length} values to ${outputPath}${linkNote}; the old file is kept at ${outputPath}.previous${exclusionNote}${omissionNote}`
             : `Wrote ${entries.length} values to ${outputPath}${linkNote}${exclusionNote}${omissionNote}`,
