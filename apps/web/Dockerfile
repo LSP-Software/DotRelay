@@ -18,7 +18,7 @@ RUN test "$(bun --revision)" = "1.4.4+38afee6c8" && bun install --frozen-lockfil
 RUN bun run --cwd apps/web build
 
 # Runtime: Next.js standalone output is a plain Node process.
-FROM node@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914
+FROM node@sha256:e18c3ccdf7d71619990b0e85639f506e2028a95410999cab24cc373cbd10e0ac
 
 # The profile declaration travels with the image so the server-side boundary
 # route resolves the same Server Profile the client bundle was built with,
